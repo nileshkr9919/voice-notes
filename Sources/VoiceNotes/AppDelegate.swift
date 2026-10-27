@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
         store.ringsOnThisDevice = { UserDefaults.standard.bool(forKey: Prefs.ringOnThisMac) }
         store.context = { UserContext.current() }
+        store.isInCall = { UserContext.captureDeviceInUse() }
         notifier = Notifier(store: store)
         notifier.onOpen = { [weak self] in self?.showPopover() }
         store.onDue = { [weak self] due in
@@ -93,7 +94,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     func popoverDidClose(_ notification: Notification) {
-        NotificationCenter.default.post(name: .popoverDidClose, object: nil)
+        NotificationCenter.default.post(name: .commitEdits, object: nil)
         // A first-run permission prompt takes focus and closes the popover; keep going,
         // the popover reopens once recording starts.
         guard !speech.isRequestingPermission else { return }

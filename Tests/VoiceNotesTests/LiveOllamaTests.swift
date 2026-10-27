@@ -10,7 +10,9 @@ final class LiveOllamaTests: XCTestCase {
     func testParsesReminderAndPlainNote() async throws {
         let reminder = try await Ollama.parse("remind me to call the bank tomorrow at 11", model: "gemma4")
         let at = try XCTUnwrap(reminder.remindAt)
-        XCTAssertTrue(Calendar.current.isDateInTomorrow(at))
+        // Before 4 AM people mean the coming morning by "tomorrow".
+        let earlyHours = Calendar.current.component(.hour, from: Date()) < 4
+        XCTAssertTrue(earlyHours ? Calendar.current.isDateInToday(at) : Calendar.current.isDateInTomorrow(at))
         XCTAssertEqual(Calendar.current.component(.hour, from: at), 11)
 
         let plain = try await Ollama.parse("buy milk eggs and bread", model: "gemma4")
@@ -38,6 +40,22 @@ final class LiveOllamaTests: XCTestCase {
         XCTAssertEqual(list.items.map { $0.text.lowercased() }, ["milk", "eggs", "bread", "coffee"])
         let single = try await Ollama.parse("call the bank about the card fee", model: "gemma4")
         XCTAssertFalse(single.isChecklist)
+    }
+
+    func testAnswersQuestionsFromNotes() async throws {
+        guard case .question = try await Ollama.interpret("what's the wifi password at mom's place?", model: "gemma4")
+        else { return XCTFail("expected a question") }
+        guard case .note = try await Ollama.interpret("remind me to buy milk tomorrow", model: "gemma4")
+        else { return XCTFail("expected a note") }
+
+        let notes = [
+            Note(title: "Mom's Wi-Fi", body: "The wifi password at mom's place is sunflower42.", tag: "personal"),
+            Note(title: "Dentist", body: "Dentist appointment on Friday at 4 pm.", tag: "health"),
+        ]
+        let reply = try await Ollama.answer("what's the wifi password at mom's place?", notes: notes, model: "gemma4")
+        XCTAssertTrue(reply.contains("sunflower42"), reply)
+        let unknown = try await Ollama.answer("what's my passport number?", notes: notes, model: "gemma4")
+        XCTAssertTrue(unknown.lowercased().contains("couldn't find"), unknown)
     }
 
     func testMissingModelIsReported() async {

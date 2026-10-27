@@ -12,6 +12,13 @@ final class CaptureModel: ObservableObject {
 
     @Published private(set) var isProcessing = false
     @Published var status: Status?
+    /// The latest answer to a question about the notes ("what's mom's wifi password?").
+    @Published var answer: Answer?
+
+    struct Answer: Equatable {
+        var question: String
+        var text: String
+    }
     /// Tab to switch to after saving, so the new note is visible.
     @Published var focusTab: NoteTab?
     /// Why Ollama can't be used right now, if anything.
@@ -35,6 +42,7 @@ final class CaptureModel: ObservableObject {
     func start() async {
         guard !isProcessing, !speech.isRecording else { return }
         status = nil
+        answer = nil
         Ollama.warmUp(model: Prefs.modelName) // load the model while the user talks
         await speech.start(autoStop: UserDefaults.standard.bool(forKey: Prefs.autoStop))
     }
@@ -57,10 +65,17 @@ final class CaptureModel: ObservableObject {
         }
         isProcessing = true
         defer { isProcessing = false }
+        answer = nil
 
         let note: Note
         do {
-            note = try await Ollama.parse(text, model: Prefs.modelName)
+            switch try await Ollama.interpret(text, model: Prefs.modelName) {
+            case .question:
+                await answerQuestion(text)
+                return
+            case .note(let parsed):
+                note = parsed
+            }
             ollamaProblem = nil
             let when = note.repeatRule?.summary ?? note.remindAt.map(Self.format)
                 ?? (note.isChecklist ? "\(note.items.count) items" : nil)
@@ -73,6 +88,18 @@ final class CaptureModel: ObservableObject {
         }
         store.add(note)
         focusTab = note.remindAt == nil ? .notes : .reminders
+    }
+
+    private func answerQuestion(_ question: String) async {
+        do {
+            let reply = try await Ollama.answer(question, notes: store.notes, model: Prefs.modelName)
+            answer = Answer(question: question, text: reply)
+            status = nil
+            ollamaProblem = nil
+        } catch {
+            status = Status(text: "Couldn't answer that. \(error.localizedDescription)", isError: true)
+            await refreshHealth()
+        }
     }
 
     func delete(_ id: UUID) {

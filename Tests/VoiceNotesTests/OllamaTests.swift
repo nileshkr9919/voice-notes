@@ -68,4 +68,20 @@ final class OllamaTests: XCTestCase {
         XCTAssertFalse(Ollama.isInstalled("llama3", in: installed))
         XCTAssertFalse(Ollama.isInstalled("mistral", in: installed))
     }
+
+    func testTomorrowSaidAfterMidnightMeansTheComingMorning() {
+        let cal = Calendar.current
+        let lateNight = cal.date(bySettingHour: 0, minute: 40, second: 0, of: Date())!
+        let calendarTomorrow11 = cal.date(bySettingHour: 11, minute: 0, second: 0,
+                                          of: cal.date(byAdding: .day, value: 1, to: lateNight)!)!
+        let adjusted = Ollama.adjustLateNightTomorrow(calendarTomorrow11, text: "call the bank tomorrow at 11",
+                                                      now: lateNight)!
+        XCTAssertTrue(cal.isDate(adjusted, inSameDayAs: lateNight))
+        XCTAssertEqual(cal.component(.hour, from: adjusted), 11)
+
+        let evening = cal.date(bySettingHour: 20, minute: 0, second: 0, of: Date())!
+        let tomorrowFromEvening = cal.date(byAdding: .day, value: 1, to: evening)!
+        XCTAssertEqual(Ollama.adjustLateNightTomorrow(tomorrowFromEvening, text: "tomorrow", now: evening),
+                       tomorrowFromEvening)
+    }
 }

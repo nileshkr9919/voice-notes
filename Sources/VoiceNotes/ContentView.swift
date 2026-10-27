@@ -33,7 +33,7 @@ struct ContentView: View {
             header
             if let note = editing {
                 NoteEditor(note: note) { updated in
-                    store.update(updated)
+                    store.update(updated, from: note)
                     editing = nil
                 } onCancel: {
                     editing = nil
@@ -53,7 +53,7 @@ struct ContentView: View {
             // Make sure the live transcript and Stop button are visible whenever the mic is on.
             if recording {
                 showSettings = false
-                editing = nil
+                closeEditorKeepingChanges()
             }
         }
         .onChange(of: capture.focusTab) { _, newTab in
@@ -64,13 +64,20 @@ struct ContentView: View {
         }
     }
 
+    /// Leaving the editor any way but Cancel keeps the person's edits (HIG: only Cancel discards).
+    private func closeEditorKeepingChanges() {
+        guard editing != nil else { return }
+        NotificationCenter.default.post(name: .commitEdits, object: nil)
+        editing = nil
+    }
+
     // MARK: Header
 
     private var header: some View {
         HStack(spacing: 12) {
             if editing != nil || showSettings {
                 Button {
-                    editing = nil
+                    closeEditorKeepingChanges()
                     showSettings = false
                 } label: {
                     Image(systemName: "chevron.left")
@@ -109,6 +116,7 @@ struct ContentView: View {
             banners
             if isRecording { recordingBar } else { captureBar }
             statusLine
+            if let answer = capture.answer { answerCard(answer) }
             FlatSegmented(options: NoteTab.allCases, selection: $tab, title: tabTitle)
                 .padding(.top, 7)
             HStack(spacing: 6) {
@@ -149,7 +157,7 @@ struct ContentView: View {
 
     private var captureBar: some View {
         HStack(spacing: 8) {
-            TextField("Type a note, or click the mic", text: $typed, axis: .vertical)
+            TextField("Type a note, or ask about your notes", text: $typed, axis: .vertical)
                 .lineLimit(1...4)
                 .padding(.vertical, 4)
                 .flatField()
@@ -232,6 +240,32 @@ struct ContentView: View {
         }
     }
 
+    /// The answer to a question about the notes, e.g. "what's the wifi password at mom's?".
+    private func answerCard(_ answer: CaptureModel.Answer) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Image(systemName: "sparkle.magnifyingglass")
+                Text(answer.question).lineLimit(1).truncationMode(.tail)
+                Spacer(minLength: 4)
+                Button { capture.answer = nil } label: { Image(systemName: "xmark") }
+                    .buttonStyle(.plain)
+                    .help("Dismiss")
+                    .accessibilityLabel("Dismiss answer")
+            }
+            .font(.subheadline)
+            .foregroundStyle(VoiceStyle.secondaryText)
+            Text(answer.text)
+                .font(.body)
+                .foregroundStyle(VoiceStyle.primaryText)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(VoiceStyle.field, in: RoundedRectangle(cornerRadius: 6))
+        .transition(.opacity)
+    }
+
     private func openPrivacySettings() {
         let anchor = AVAuthorizationHelper.microphoneDenied ? "Privacy_Microphone" : "Privacy_SpeechRecognition"
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)") {
@@ -304,7 +338,8 @@ struct ContentView: View {
 }
 
 extension Notification.Name {
-    static let popoverDidClose = Notification.Name("VoiceNotesPopoverDidClose")
+    /// Asks an open editor to save its changes (popover closing, Back, recording starting).
+    static let commitEdits = Notification.Name("VoiceNotesCommitEdits")
 }
 
 private enum AVAuthorizationHelper {
@@ -558,7 +593,7 @@ struct NoteEditor: View {
         _limitHours = State(initialValue: rule?.startMinute != nil)
         _startTime = State(initialValue: Self.time(rule?.startMinute ?? 9 * 60))
         _endTime = State(initialValue: Self.time(rule?.endMinute ?? 18 * 60))
-        _days = State(initialValue: Set(rule?.weekdays ?? Array(1...7)))
+        _days = State(initialValue: Set((rule?.weekdays ?? Array(1...7)).filter { (1...7).contains($0) }))
         _activeTimeOnly = State(initialValue: rule?.activeTimeOnly ?? false)
     }
 
@@ -611,7 +646,7 @@ struct NoteEditor: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
         }
-        .onReceive(NotificationCenter.default.publisher(for: .popoverDidClose)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .commitEdits)) { _ in
             // HIG: a popover that closes on its own keeps the person's work; only Cancel discards it.
             if !isEmpty && repeatError == nil { save() }
         }
@@ -782,6 +817,7 @@ private struct ChecklistEditor: View {
                     }
                     .buttonStyle(.plain)
                     .opacity(hovered == item.id ? 1 : 0)
+                    .allowsHitTesting(hovered == item.id)
                     .accessibilityLabel("Delete item")
                 }
                 .frame(minHeight: 22)
@@ -805,7 +841,8 @@ private struct ChecklistEditor: View {
         } else {
             items.append(new)
         }
-        focused = new.id
+        // Focus once the new row exists.
+        DispatchQueue.main.async { focused = new.id }
     }
 }
 

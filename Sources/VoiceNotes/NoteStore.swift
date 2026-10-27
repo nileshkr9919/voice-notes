@@ -20,6 +20,8 @@ final class NoteStore: ObservableObject {
     var ringsOnThisDevice: () -> Bool = { true }
     /// What the user is doing; habit reminders wait for a good moment.
     var context: () -> UserContext = { .active }
+    /// Whether another app is using the camera or mic. Costlier, so asked only when a habit is due.
+    var isInCall: () -> Bool = { false }
 
     /// All records including tombstones, by id.
     private var records: [UUID: Note] = [:]
@@ -98,19 +100,32 @@ final class NoteStore: ObservableObject {
         persist(note)
     }
 
-    /// Applies user edits. Only the editable fields are copied, so state that changed
-    /// while the editor was open (fired, done, snoozed) isn't overwritten by a stale copy.
-    func update(_ note: Note) {
+    /// Applies user edits. With `original` (the note as the editor first saw it), only fields
+    /// the user actually changed are applied, so changes made meanwhile — a reminder firing,
+    /// an item ticked on another Mac — aren't overwritten by the editor's stale copy.
+    func update(_ note: Note, from original: Note? = nil) {
+        guard let current = records[note.id] else { return }
+        let base = original ?? current
+        let titleChanged = note.title != base.title
+        let bodyChanged = note.body != base.body
+        let tagChanged = note.tag != base.tag
+        let itemsChanged = note.items != base.items
+        let reminderChanged = note.remindAt != base.remindAt && note.repeatRule == nil
+        let ruleChanged = !(note.repeatRule?.sameSchedule(as: base.repeatRule)
+                            ?? (base.repeatRule == nil))
+        guard titleChanged || bodyChanged || tagChanged || itemsChanged || reminderChanged || ruleChanged
+        else { return } // nothing changed: don't write or sync anything
+
         mutate(note.id) { current in
-            current.title = note.title
-            current.body = note.body
-            current.tag = note.tag
-            current.items = note.items
-            if current.remindAt != note.remindAt {
+            if titleChanged { current.title = note.title }
+            if bodyChanged { current.body = note.body }
+            if tagChanged { current.tag = note.tag }
+            if itemsChanged { current.items = note.items }
+            if reminderChanged {
                 current.remindAt = note.remindAt
                 current.notified = false
             }
-            if current.repeatRule != note.repeatRule {
+            if ruleChanged {
                 // Keep today's count; restart the schedule from the new rule.
                 var rule = note.repeatRule
                 rule?.doneCount = current.repeatRule?.doneCount ?? 0
@@ -177,7 +192,9 @@ final class NoteStore: ObservableObject {
 
     func checkDue(now: Date = Date()) {
         guard ringsOnThisDevice() else { return }
-        let context = context()
+        // Presence only matters for habits; skip the checks entirely when there are none.
+        let hasHabits = records.values.contains { $0.isRepeating && !$0.isDeleted }
+        let context = hasHabits ? context() : .active
         let onBreak = context.screenLocked || context.idleSeconds >= Self.breakAfter
         if onBreak {
             wasOnBreak = true
@@ -199,9 +216,16 @@ final class NoteStore: ObservableObject {
                 fired.append(note)
                 continue
             }
+            // Outside its hours or days (e.g. due while the Mac slept): wait for the next window.
+            if !rule.isActive(at: now) {
+                mutate(note.id) { $0.remindAt = rule.nextActive(from: now) }
+                continue
+            }
             // Habit reminders wait for a good moment: not to an empty room, not mid-call.
             if away { continue }
-            if context.inCall && now.timeIntervalSince(note.remindAt!) < Self.maxCallDeferral { continue }
+            if now.timeIntervalSince(note.remindAt!) < Self.maxCallDeferral && (context.inCall || isInCall()) {
+                continue
+            }
             mutate(note.id) {
                 $0.remindAt = rule.nextOccurrence(after: now)
                 $0.notified = false
@@ -231,6 +255,8 @@ final class NoteStore: ObservableObject {
     /// Merges the folder's contents into memory: for each note the newest edit wins.
     func reload() {
         let snapshot = folder.load()
+        // An unreadable folder (offline, unmounted) says nothing; keep what's in memory.
+        guard !snapshot.folderUnavailable else { return }
         var merged = records
         for (id, disk) in snapshot.notes where !unsaved.contains(id) {
             if let mine = merged[id], mine.updatedAt >= disk.updatedAt { continue }
@@ -305,6 +331,8 @@ final class NoteStore: ObservableObject {
     }
 
     private func publish() {
-        notes = records.values.filter { !$0.isDeleted }
+        // Only publish real changes, so the UI and badge don't redraw on every 15 s tick.
+        let live = records.values.filter { !$0.isDeleted }.sorted { $0.id.uuidString < $1.id.uuidString }
+        if live != notes { notes = live }
     }
 }

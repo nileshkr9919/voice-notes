@@ -131,7 +131,7 @@ final class SmartReminderTests: XCTestCase {
 
     func testHabitWaitsOutACallButNotForever() {
         let id = addHabit("Water")
-        context.inCall = true
+        store.isInCall = { true }
         store.checkDue()
         XCTAssertEqual(fired, [])
         store.checkDue(now: store.note(id: id)!.remindAt!.addingTimeInterval(NoteStore.maxCallDeferral + 1))

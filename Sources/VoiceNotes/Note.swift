@@ -53,6 +53,14 @@ struct RepeatRule: Codable, Equatable {
     var doneCount = 0
     var doneDate: Date?
 
+    /// Same schedule, ignoring the done counters.
+    func sameSchedule(as other: RepeatRule?) -> Bool {
+        guard var other else { return false }
+        other.doneCount = doneCount
+        other.doneDate = doneDate
+        return other == self
+    }
+
     var doneToday: Int {
         guard let doneDate, Calendar.current.isDateInToday(doneDate) else { return 0 }
         return doneCount
@@ -75,21 +83,29 @@ struct RepeatRule: Codable, Equatable {
         if isActive(at: date) { return date }
         let cal = Calendar.current
         let day = cal.startOfDay(for: date)
+        let start = startMinute ?? 0
         for offset in 0...8 {
-            guard let start = cal.date(byAdding: .minute, value: startMinute ?? 0,
-                                       to: cal.date(byAdding: .day, value: offset, to: day)!) else { continue }
-            if start > date && isActive(at: start) { return start }
+            // Wall-clock time on each day, so DST changes don't shift the window by an hour.
+            guard let candidateDay = cal.date(byAdding: .day, value: offset, to: day),
+                  let candidate = cal.date(bySettingHour: start / 60, minute: start % 60, second: 0,
+                                           of: candidateDay) else { continue }
+            if candidate > date && isActive(at: candidate) { return candidate }
         }
         return date
     }
 
     func isActive(at date: Date) -> Bool {
         let cal = Calendar.current
-        if let weekdays, !weekdays.contains(cal.component(.weekday, from: date)) { return false }
-        guard let start = startMinute, let end = endMinute, start != end else { return true }
-        let parts = cal.dateComponents([.hour, .minute], from: date)
+        let parts = cal.dateComponents([.hour, .minute, .weekday], from: date)
         let minute = parts.hour! * 60 + parts.minute!
-        return start < end ? (minute >= start && minute < end) : (minute >= start || minute < end)
+        var weekday = parts.weekday!
+        if let start = startMinute, let end = endMinute, start != end {
+            let inWindow = start < end ? (minute >= start && minute < end) : (minute >= start || minute < end)
+            guard inWindow else { return false }
+            // The after-midnight part of an overnight window belongs to the day it started.
+            if start > end && minute < end { weekday = weekday == 1 ? 7 : weekday - 1 }
+        }
+        return weekdays.map { $0.contains(weekday) } ?? true
     }
 
     /// Short description, e.g. "every 10–20 min · 9:00–18:00 · weekdays".
@@ -104,7 +120,8 @@ struct RepeatRule: Codable, Equatable {
         if let weekdays {
             let set = Set(weekdays)
             parts.append(set == [2, 3, 4, 5, 6] ? "weekdays" : set == [1, 7] ? "weekends"
-                : weekdays.sorted().map { Calendar.current.shortWeekdaySymbols[$0 - 1] }.joined(separator: " "))
+                : weekdays.filter { (1...7).contains($0) }.sorted()
+                    .map { Calendar.current.shortWeekdaySymbols[$0 - 1] }.joined(separator: " "))
         }
         return parts.joined(separator: " · ")
     }

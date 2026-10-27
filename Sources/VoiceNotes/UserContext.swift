@@ -12,7 +12,8 @@ struct UserContext {
     static let active = UserContext()
 
     static func current() -> UserContext {
-        UserContext(idleSeconds: idleSeconds(), inCall: captureDeviceInUse(), screenLocked: isScreenLocked())
+        // Cheap checks only; the camera/mic check is `captureDeviceInUse()`, asked when needed.
+        UserContext(idleSeconds: idleSeconds(), screenLocked: isScreenLocked())
     }
 
     private static func idleSeconds() -> TimeInterval {
@@ -20,7 +21,7 @@ struct UserContext {
         CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)
     }
 
-    private static func captureDeviceInUse() -> Bool {
+    static func captureDeviceInUse() -> Bool {
         let devices = AVCaptureDevice.DiscoverySession(
             deviceTypes: [.microphone, .builtInWideAngleCamera, .external],
             mediaType: nil, position: .unspecified).devices

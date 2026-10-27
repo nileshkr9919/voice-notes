@@ -42,6 +42,7 @@ Voice Notes doesn't run a server. Instead it can keep notes in a folder that you
 Each note is a small JSON file. When the same note is edited on two Macs, the newest edit wins, and deletions sync too.
 
 ## Privacy
+- Optional **end-to-end encryption** (Settings → Sync across Macs → Encrypt Notes): notes are sealed with AES-256-GCM using a key derived from your passphrase (PBKDF2-SHA256), so a sync provider or anyone with access to the folder sees only ciphertext. The key stays in each Mac's Keychain; enter the passphrase once per Mac. **There is no recovery if you forget the passphrase.**
 - Speech is transcribed on-device by macOS.
 - Notes are understood by the AI model running in Ollama on your Mac (`localhost:11434`).
 - Notes are stored as files in `~/Library/Application Support/VoiceNotes/Notes/` or in the folder you chose.

@@ -225,6 +225,16 @@ struct ContentView: View {
                 Button("Retry") { Task { await capture.refreshHealth() } }
             }
         }
+        if store.isLocked {
+            PassphrasePrompt(
+                message: "Your notes are encrypted. Enter the passphrase to unlock them on this Mac.",
+                action: "Unlock"
+            ) { passphrase in
+                if !store.unlock(passphrase: passphrase) { throw NoteCryptoError.wrongPassphrase }
+            }
+            .padding(10)
+            .background(VoiceStyle.field, in: RoundedRectangle(cornerRadius: 6))
+        }
         if capture.notificationsOff {
             Banner(systemImage: "bell.slash.fill", tint: .orange,
                    text: "Notifications are off for Voice Notes, so reminders can't pop up.") {
@@ -943,6 +953,72 @@ private struct ChecklistEditor: View {
     }
 }
 
+/// A passphrase entry (optionally with confirmation) used to turn encryption on or off,
+/// unlock notes on this Mac, or open an encrypted folder.
+struct PassphrasePrompt: View {
+    let message: String
+    let action: String
+    var confirm = false
+    var onCancel: (() -> Void)?
+    let onSubmit: (String) throws -> Void
+
+    @State private var passphrase = ""
+    @State private var repeated = ""
+    @State private var error: String?
+    @FocusState private var focused: Bool
+
+    private var problem: String? {
+        guard confirm else { return nil }
+        if passphrase.count < 8 { return "Use at least 8 characters." }
+        if repeated != passphrase { return repeated.isEmpty ? nil : "The passphrases don't match." }
+        return nil
+    }
+
+    private var canSubmit: Bool {
+        !passphrase.isEmpty && problem == nil && (!confirm || repeated == passphrase)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(message, systemImage: "lock.fill")
+                .font(.subheadline)
+                .foregroundStyle(VoiceStyle.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+            SecureField("Passphrase", text: $passphrase)
+                .flatField()
+                .focused($focused)
+                .onSubmit { if canSubmit { submit() } }
+            if confirm {
+                SecureField("Repeat passphrase", text: $repeated)
+                    .flatField()
+                    .onSubmit { if canSubmit { submit() } }
+            }
+            if let message = error ?? problem {
+                Text(message).font(.subheadline).foregroundStyle(.red)
+            }
+            HStack {
+                Spacer()
+                if let onCancel { Button("Cancel", action: onCancel) }
+                Button(action, action: submit)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!canSubmit)
+            }
+        }
+        .onAppear { focused = true }
+    }
+
+    private func submit() {
+        do {
+            try onSubmit(passphrase)
+            error = nil
+        } catch {
+            self.error = error.localizedDescription
+            passphrase = ""
+            repeated = ""
+        }
+    }
+}
+
 /// A small number field with a stepper, for minute counts.
 private struct MinutesField: View {
     @Binding var value: Int
@@ -967,6 +1043,11 @@ struct SettingsView: View {
     @AppStorage(Prefs.notesFolder) private var notesFolder = ""
     @AppStorage(Prefs.ringOnThisMac) private var ringOnThisMac = true
     @State private var folderError: String?
+    /// A chosen folder that's encrypted and still needs its passphrase.
+    @State private var pendingFolder: (url: URL, path: String)?
+    @State private var encryptionStep: EncryptionStep = .idle
+
+    private enum EncryptionStep { case idle, enabling, disabling }
     @AppStorage(Prefs.voice) private var voice = "Freya"
     @AppStorage(Prefs.speakReminders) private var speakReminders = true
     @AppStorage(Prefs.model) private var model = "gemma4"
@@ -1060,7 +1141,19 @@ struct SettingsView: View {
                     if let folderError {
                         Text(folderError).font(.subheadline).foregroundStyle(.red)
                     }
+                    if let pendingFolder {
+                        PassphrasePrompt(
+                            message: "That folder's notes are encrypted. Enter its passphrase to use it.",
+                            action: "Unlock",
+                            onCancel: { self.pendingFolder = nil }
+                        ) { passphrase in
+                            try store.changeFolder(to: pendingFolder.url, passphrase: passphrase)
+                            notesFolder = pendingFolder.path
+                            self.pendingFolder = nil
+                        }
+                    }
                     caption("Choose a folder in iCloud Drive, Dropbox or similar, then the same folder on your other Macs. Your notes are copied there.")
+                    encryptionControls
                 }
                 Divider()
                 section("General") {
@@ -1122,8 +1215,49 @@ struct SettingsView: View {
             try store.changeFolder(to: url)
             notesFolder = path
             folderError = nil
+            pendingFolder = nil
+        } catch NoteCryptoError.needsPassphrase {
+            pendingFolder = (url, path)
+            folderError = nil
         } catch {
             folderError = "Couldn't use that folder: \(error.localizedDescription)"
+        }
+    }
+
+    @ViewBuilder
+    private var encryptionControls: some View {
+        switch encryptionStep {
+        case .idle:
+            HStack {
+                Label(store.isEncrypted ? "Notes are encrypted" : "Notes are not encrypted",
+                      systemImage: store.isEncrypted ? "lock.fill" : "lock.open")
+                    .foregroundStyle(store.isEncrypted ? VoiceStyle.primaryText : VoiceStyle.secondaryText)
+                Spacer()
+                if store.isEncrypted {
+                    Button("Turn Off…") { encryptionStep = .disabling }
+                } else {
+                    Button("Encrypt Notes…") { encryptionStep = .enabling }
+                }
+            }
+            .disabled(store.isLocked)
+        case .enabling:
+            PassphrasePrompt(
+                message: "Notes are encrypted with this passphrase (AES-256). Enter the same passphrase once on each of your Macs. If you forget it, your notes can't be recovered.",
+                action: "Encrypt", confirm: true,
+                onCancel: { encryptionStep = .idle }
+            ) { passphrase in
+                try store.enableEncryption(passphrase: passphrase)
+                encryptionStep = .idle
+            }
+        case .disabling:
+            PassphrasePrompt(
+                message: "Enter the passphrase to decrypt your notes back to plain files.",
+                action: "Turn Off Encryption",
+                onCancel: { encryptionStep = .idle }
+            ) { passphrase in
+                try store.disableEncryption(passphrase: passphrase)
+                encryptionStep = .idle
+            }
         }
     }
 

@@ -9,6 +9,7 @@
 - **Reminders even when the app is quit** — upcoming one-time reminders are also scheduled with macOS, so they still pop up if Voice Notes isn't running (no duplicates when it is).
 - Reminders say and show just the task ("Walk away from the screen."), without the schedule ("every 30 minutes").
 - A banner warns when macOS notifications are switched off for Voice Notes, with a button to turn them on.
+- **Optional encryption** — Settings → Sync → Encrypt Notes. Each note file is sealed with AES-256-GCM using a key derived from your passphrase (PBKDF2-SHA256, 600,000 rounds); the key stays in this Mac's Keychain. Other Macs ask for the passphrase once. Turning it off decrypts everything back.
 - **Checklists** — "buy milk, eggs, bread and coffee" becomes a tickable list; tick items right in the list or edit them in the editor.
 - **macOS-native redesign** from Penpot designs: compact popover that fits its content, flat controls, Reminders-style rows, in-popover editor and settings; waveform menu bar icon.
 - Copy/paste and other edit shortcuts work in all text fields; the popover saves edits when it closes on its own.

@@ -13,6 +13,8 @@ final class NoteStore: ObservableObject {
     /// Set when the latest save failed; cleared by the next successful one.
     @Published private(set) var saveError: String?
     @Published private(set) var folder: NoteFolder
+    /// Encrypted notes this Mac can't open until the passphrase is entered.
+    @Published private(set) var lockedCount = 0
 
     /// Called with every reminder that came due in one check (several after a sleep or relaunch).
     var onDue: (([Note]) -> Void)?
@@ -264,7 +266,9 @@ final class NoteStore: ObservableObject {
 
     /// Merges the folder's contents into memory: for each note the newest edit wins.
     func reload() {
+        folder.refreshVault() // another Mac may have turned encryption on or off
         let snapshot = folder.load()
+        lockedCount = snapshot.lockedCount
         // An unreadable folder (offline, unmounted) says nothing; keep what's in memory.
         guard !snapshot.folderUnavailable else { return }
         var merged = records
@@ -292,10 +296,18 @@ final class NoteStore: ObservableObject {
     }
 
     /// Switches to another folder, copying this Mac's notes into it. Notes already
-    /// there (e.g. from another Mac) are merged, newest edit winning.
-    func changeFolder(to url: URL) throws {
-        let target = NoteFolder(url: url)
+    /// there (e.g. from another Mac) are merged, newest edit winning. An encrypted target
+    /// needs its passphrase; moving encrypted notes keeps them encrypted.
+    func changeFolder(to url: URL, passphrase: String? = nil) throws {
+        var target = NoteFolder(url: url)
         try target.ensureExists()
+        if target.isLocked {
+            guard let passphrase else { throw NoteCryptoError.needsPassphrase }
+            guard target.unlock(passphrase: passphrase) else { throw NoteCryptoError.wrongPassphrase }
+        }
+        if !target.isEncrypted, let vault = folder.vault, let key = folder.key {
+            try target.adopt(vault, key: key)
+        }
         let existing = target.load().notes
         for note in records.values {
             if let there = existing[note.id], there.updatedAt >= note.updatedAt { continue }
@@ -305,6 +317,36 @@ final class NoteStore: ObservableObject {
         records = [:]
         unsaved = []
         recentlyDeleted = nil
+        reload()
+    }
+
+    // MARK: Encryption
+
+    var isEncrypted: Bool { folder.isEncrypted }
+    var isLocked: Bool { folder.isLocked }
+
+    /// Encrypts every note in the folder with a key made from `passphrase`.
+    func enableEncryption(passphrase: String, iterations: Int = Vault.defaultIterations) throws {
+        guard !folder.isEncrypted else { return }
+        try folder.setUpEncryption(passphrase: passphrase, iterations: iterations)
+        for note in records.values { try folder.write(note) } // each write replaces the plain file
+        reload()
+    }
+
+    /// Unlocks an encrypted folder on this Mac (asked once per Mac).
+    @discardableResult
+    func unlock(passphrase: String) -> Bool {
+        guard folder.unlock(passphrase: passphrase) else { return false }
+        reload()
+        return true
+    }
+
+    /// Decrypts every note back to plain files. Needs the passphrase, so it can't be done by accident.
+    func disableEncryption(passphrase: String) throws {
+        guard let vault = folder.vault else { return }
+        guard vault.key(for: passphrase) != nil else { throw NoteCryptoError.wrongPassphrase }
+        if folder.isLocked { _ = folder.unlock(passphrase: passphrase); reload() }
+        try folder.removeEncryption(rewriting: Array(records.values))
         reload()
     }
 

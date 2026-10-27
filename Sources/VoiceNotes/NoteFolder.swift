@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// A folder of notes, one JSON file per note. Point it at iCloud Drive, Dropbox,
@@ -5,6 +6,70 @@ import Foundation
 /// touch the same file, and when they do the newest `updatedAt` wins.
 struct NoteFolder {
     let url: URL
+    /// Present when the folder's notes are encrypted (see NoteCrypto.swift).
+    private(set) var vault: Vault?
+    /// This Mac's key for the vault; nil means locked until the passphrase is entered.
+    private(set) var key: SymmetricKey?
+
+    /// Where folder keys are kept (the Keychain; tests swap in memory).
+    nonisolated(unsafe) static var keyStore: KeyStore = KeychainKeyStore()
+    static let plainExtension = "json"
+    static let sealedExtension = "vnote"
+
+    init(url: URL) {
+        self.url = url
+        refreshVault()
+    }
+
+    var isEncrypted: Bool { vault != nil }
+    var isLocked: Bool { vault != nil && key == nil }
+
+    /// Picks up encryption turned on or off by another Mac, and this Mac's key for it.
+    mutating func refreshVault() {
+        let current = (try? Data(contentsOf: url.appendingPathComponent(Vault.fileName)))
+            .flatMap { try? JSONDecoder().decode(Vault.self, from: $0) }
+        guard current != vault else { return }
+        vault = current
+        key = current.flatMap { vault in Self.keyStore.key(for: vault.id).flatMap { vault.accepts($0) ? $0 : nil } }
+    }
+
+    /// Turns encryption on for this folder. The caller then rewrites the notes.
+    mutating func setUpEncryption(passphrase: String, iterations: Int = Vault.defaultIterations) throws {
+        let (vault, key) = try Vault.create(passphrase: passphrase, iterations: iterations)
+        try adopt(vault, key: key)
+    }
+
+    /// Uses an existing vault and key (e.g. when moving encrypted notes to another folder).
+    mutating func adopt(_ vault: Vault, key: SymmetricKey) throws {
+        try ensureExists()
+        try JSONEncoder().encode(vault).write(to: url.appendingPathComponent(Vault.fileName), options: .atomic)
+        Self.keyStore.save(key, for: vault.id)
+        self.vault = vault
+        self.key = key
+    }
+
+    /// Unlocks an encrypted folder on this Mac. Returns false for a wrong passphrase.
+    mutating func unlock(passphrase: String) -> Bool {
+        guard let vault, let key = vault.key(for: passphrase) else { return false }
+        Self.keyStore.save(key, for: vault.id)
+        self.key = key
+        return true
+    }
+
+    /// Turns encryption off: writes every note back as plain JSON first, then removes the
+    /// encrypted copies, the vault and the key — so an interruption never loses notes.
+    mutating func removeEncryption(rewriting notes: [Note]) throws {
+        guard let vault else { return }
+        for note in notes { try writeFile(note, sealed: false) }
+        try? FileManager.default.removeItem(at: url.appendingPathComponent(Vault.fileName))
+        Self.keyStore.delete(for: vault.id)
+        self.vault = nil
+        self.key = nil
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: url.path)) ?? []
+        for name in names where name.hasSuffix("." + Self.sealedExtension) {
+            try? FileManager.default.removeItem(at: url.appendingPathComponent(name))
+        }
+    }
 
     static var defaultURL: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -27,10 +92,12 @@ struct NoteFolder {
         var downloading: Set<UUID> = []
         /// The folder itself couldn't be listed (offline, unmounted): the snapshot says nothing.
         var folderUnavailable = false
+        /// Encrypted notes that couldn't be opened because this Mac doesn't have the key yet.
+        var lockedCount = 0
     }
 
     func fileURL(for id: UUID) -> URL {
-        url.appendingPathComponent("\(id.uuidString).json")
+        url.appendingPathComponent("\(id.uuidString).\(isEncrypted ? Self.sealedExtension : Self.plainExtension)")
     }
 
     func ensureExists() throws {
@@ -49,21 +116,35 @@ struct NoteFolder {
         for name in names {
             let file = url.appendingPathComponent(name)
             // iCloud Drive may keep only a placeholder (".<name>.json.icloud") until asked to download.
-            if name.hasPrefix("."), name.hasSuffix(".json.icloud") {
+            if name.hasPrefix("."), name.hasSuffix(".icloud") {
                 let original = String(name.dropFirst().dropLast(".icloud".count))
                 try? fm.startDownloadingUbiquitousItem(at: url.appendingPathComponent(original))
-                if let id = UUID(uuidString: String(original.dropLast(".json".count))) {
+                if let id = Self.noteID(fromFileName: original) {
                     snapshot.downloading.insert(id)
                 }
                 continue
             }
             // Sync services name conflicting copies differently ("<id> 2.json",
             // "<id> (conflicted copy).json"); they're read too and merged by id.
-            guard name.hasSuffix(".json"), !name.hasPrefix(".") else { continue }
-            guard let data = try? Data(contentsOf: file) else {
+            let sealed = name.hasSuffix("." + Self.sealedExtension)
+            guard sealed || name.hasSuffix("." + Self.plainExtension), !name.hasPrefix(".") else { continue }
+            guard var data = try? Data(contentsOf: file) else {
                 // Not readable yet (e.g. a cloud file still downloading): keep what we have.
                 if let id = Self.noteID(fromFileName: name) { snapshot.downloading.insert(id) }
                 continue
+            }
+            if sealed {
+                guard let key else {
+                    // Locked on this Mac: count it and keep anything already in memory.
+                    snapshot.lockedCount += 1
+                    if let id = Self.noteID(fromFileName: name) { snapshot.downloading.insert(id) }
+                    continue
+                }
+                guard let opened = try? NoteCrypto.open(data, key: key) else {
+                    snapshot.unreadable.append(name)
+                    continue
+                }
+                data = opened
             }
             guard let note = try? decoder.decode(Note.self, from: data) else {
                 snapshot.unreadable.append(name)
@@ -75,16 +156,32 @@ struct NoteFolder {
         return snapshot
     }
 
+    /// Writes the note encrypted if the folder is, otherwise as plain JSON.
     func write(_ note: Note) throws {
+        if isLocked { throw NoteCryptoError.locked } // never put plain text into an encrypted folder
+        try writeFile(note, sealed: isEncrypted)
+    }
+
+    private func writeFile(_ note: Note, sealed: Bool) throws {
         try ensureExists()
-        try Self.encoder.encode(note).write(to: fileURL(for: note.id), options: .atomic)
+        var data = try Self.encoder.encode(note)
+        if sealed {
+            guard let key else { throw NoteCryptoError.locked }
+            data = try NoteCrypto.seal(data, key: key)
+        }
+        let ext = sealed ? Self.sealedExtension : Self.plainExtension
+        try data.write(to: url.appendingPathComponent("\(note.id.uuidString).\(ext)"), options: .atomic)
+        // Drop the other format's copy, so a note never exists both encrypted and in plain text.
+        let other = sealed ? Self.plainExtension : Self.sealedExtension
+        try? FileManager.default.removeItem(at: url.appendingPathComponent("\(note.id.uuidString).\(other)"))
     }
 
     /// Removes the note's file and any conflict copies a sync service made of it.
     func remove(_ id: UUID) {
         let fm = FileManager.default
         let names = (try? fm.contentsOfDirectory(atPath: url.path)) ?? []
-        for name in names where name.hasSuffix(".json") && Self.noteID(fromFileName: name) == id {
+        for name in names where (name.hasSuffix("." + Self.plainExtension) || name.hasSuffix("." + Self.sealedExtension))
+            && Self.noteID(fromFileName: name) == id {
             try? fm.removeItem(at: url.appendingPathComponent(name))
         }
     }

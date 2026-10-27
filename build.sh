@@ -5,7 +5,7 @@
 #   ./build.sh --install   also copy to ~/Applications and launch
 #   ./build.sh --dist      also produce a universal build/VoiceNotes-<version>.zip
 #
-# Most people should run ./setup.sh instead, which also installs Ollama and the models.
+# Most people should run ./install.sh instead, which also installs Ollama and the models.
 #
 # For a public release, sign with your Developer ID and notarize:
 #   SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" \

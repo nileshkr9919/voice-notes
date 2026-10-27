@@ -1,4 +1,6 @@
-// swift-tools-version:6.0
+// swift-tools-version:5.10
+// 5.10 tools keep the Swift 5 language mode by default, and work with both
+// single-arch and universal (--arch arm64 --arch x86_64) builds on Xcode 16+.
 import PackageDescription
 
 let package = Package(
@@ -7,14 +9,12 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "VoiceNotes",
-            path: "Sources/VoiceNotes",
-            swiftSettings: [.swiftLanguageMode(.v5)]
+            path: "Sources/VoiceNotes"
         ),
         .testTarget(
             name: "VoiceNotesTests",
             dependencies: ["VoiceNotes"],
-            path: "Tests/VoiceNotesTests",
-            swiftSettings: [.swiftLanguageMode(.v5)]
+            path: "Tests/VoiceNotesTests"
         ),
     ]
 )

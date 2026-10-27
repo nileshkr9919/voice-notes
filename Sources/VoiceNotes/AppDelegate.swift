@@ -39,11 +39,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "note.text", accessibilityDescription: "Voice Notes")
             button.imagePosition = .imageLeading
             button.action = #selector(togglePopover)
             button.target = self
         }
+        updateIcon(recording: false)
+        // Swap the icon while the microphone is live, so it's obvious when we're listening.
+        speech.$isRecording
+            .receive(on: RunLoop.main)
+            .sink { [weak self] in self?.updateIcon(recording: $0) }
+            .store(in: &cancellables)
         // Show how many reminders have gone off and still need attention.
         store.$notes
             .receive(on: RunLoop.main)
@@ -104,6 +109,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
         showPopover()
         Task { await capture.start() }
+    }
+
+    private func updateIcon(recording: Bool) {
+        // Mirrors the app icon (a note with a microphone); template images adapt to light/dark menu bars.
+        let symbol = recording ? "record.circle.fill" : "mic.square.fill"
+        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: recording ? "Voice Notes – listening" : "Voice Notes")?
+            .withSymbolConfiguration(.init(pointSize: 15, weight: .regular))
+        image?.isTemplate = true
+        statusItem.button?.image = image
     }
 
     private func updateBadge() {

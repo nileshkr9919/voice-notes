@@ -1,0 +1,28 @@
+name: Release
+
+# Push a tag like v1.1.0 to publish a ready-made app that install.sh downloads.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test
+        run: swift test
+      - name: Build universal app
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${TAG#v}" ./build.sh --dist
+          cp build/VoiceNotes-*.zip build/VoiceNotes.zip
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" build/VoiceNotes.zip --title "Voice Notes $TAG" --generate-notes

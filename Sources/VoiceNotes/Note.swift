@@ -168,6 +168,12 @@ enum Prefs {
     static let autoStop = "autoStop"
     static let notesFolder = "notesFolder"
     static let ringOnThisMac = "ringOnThisMac"
+    /// Habit reminders are paused on this Mac until this time (seconds since 1970; 0 = not paused).
+    static let habitsPausedUntil = "habitsPausedUntil"
+    static let briefingEnabled = "briefingEnabled"
+    /// Minutes after midnight for the daily briefing.
+    static let briefingMinute = "briefingMinute"
+    static let lastBriefingDay = "lastBriefingDay"
 
     static func register() {
         UserDefaults.standard.register(defaults: [
@@ -176,7 +182,14 @@ enum Prefs {
             model: "gemma4",
             autoStop: true,
             ringOnThisMac: true,
+            briefingEnabled: false,
+            briefingMinute: 8 * 60 + 30,
         ])
+    }
+
+    static var pausedUntil: Date? {
+        let t = UserDefaults.standard.double(forKey: habitsPausedUntil)
+        return t > 0 ? Date(timeIntervalSince1970: t) : nil
     }
 
     static var modelName: String {

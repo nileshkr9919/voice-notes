@@ -16,6 +16,12 @@ struct ContentView: View {
     @State private var search = ""
     @State private var showSettings = false
     @State private var editing: Note?
+    /// Keyboard selection in the list (↑/↓, Space, Return, ⌫).
+    @State private var selection: UUID?
+    @AppStorage(Prefs.habitsPausedUntil) private var habitsPausedUntil: Double = 0
+    @FocusState private var focus: Field?
+
+    private enum Field: Hashable { case list, capture, search }
     /// Preview-only: show the recording state with this transcript.
     private let previewTranscript: String?
 
@@ -126,6 +132,13 @@ struct ContentView: View {
                 TextField("Search", text: $search)
                     .font(.subheadline)
                     .textFieldStyle(.plain)
+                    .focused($focus, equals: .search)
+                    .onKeyPress(.escape) {
+                        guard !search.isEmpty else { return .ignored }
+                        search = ""
+                        focus = .list
+                        return .handled
+                    }
             }
             .flatField(height: 22)
             noteList
@@ -134,6 +147,70 @@ struct ContentView: View {
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 8)
+        .focusable()
+        .focused($focus, equals: .list)
+        .focusEffectDisabled()
+        .onKeyPress(phases: .down, action: handleKey)
+        .onReceive(NotificationCenter.default.publisher(for: .popoverDidShow)) { _ in
+            selection = nil
+            // Ready for the keyboard without showing a focused field.
+            DispatchQueue.main.async { focus = .list }
+        }
+        .onChange(of: tab) { _, _ in selection = nil }
+    }
+
+    /// Notes shown in the current tab, filtered by the search text.
+    private var visibleNotes: [Note] {
+        let query = search.trimmingCharacters(in: .whitespaces).lowercased()
+        return store.notes(for: tab).filter {
+            query.isEmpty || "\($0.title) \($0.plainText) \($0.tag)".lowercased().contains(query)
+        }
+    }
+
+    /// Keyboard control of the list, like Apple Reminders. Only active when no text field has focus.
+    private func handleKey(_ press: KeyPress) -> KeyPress.Result {
+        guard focus == .list || focus == nil else { return .ignored }
+        let items = visibleNotes
+        let index = selection.flatMap { id in items.firstIndex { $0.id == id } }
+
+        if press.modifiers.contains(.command) {
+            switch press.characters {
+            case "f": focus = .search
+            case "n": focus = .capture
+            case "1": tab = .reminders
+            case "2": tab = .notes
+            case "3": tab = .done
+            default: return .ignored
+            }
+            return .handled
+        }
+
+        switch press.key {
+        case .downArrow:
+            guard !items.isEmpty else { return .ignored }
+            selection = items[min((index ?? -1) + 1, items.count - 1)].id
+        case .upArrow:
+            guard !items.isEmpty else { return .ignored }
+            selection = items[max((index ?? items.count) - 1, 0)].id
+        case .space:
+            guard let index else { return .ignored }
+            store.toggleDone(items[index].id)
+        case .return:
+            guard let index else { return .ignored }
+            editing = items[index]
+        case .delete, .deleteForward:
+            guard let index else { return .ignored }
+            capture.delete(items[index].id)
+            let rest = items.filter { $0.id != items[index].id }
+            selection = rest.isEmpty ? nil : rest[min(index, rest.count - 1)].id
+        default:
+            // Typing anywhere starts a new note.
+            guard press.modifiers.isDisjoint(with: [.control, .option]),
+                  let char = press.characters.first, char.isLetter || char.isNumber else { return .ignored }
+            typed += press.characters
+            focus = .capture
+        }
+        return .handled
     }
 
     private func tabTitle(_ tab: NoteTab) -> String {
@@ -148,6 +225,12 @@ struct ContentView: View {
                 Button("Retry") { Task { await capture.refreshHealth() } }
             }
         }
+        if habitsPausedUntil > Date().timeIntervalSince1970 {
+            Banner(systemImage: "pause.circle.fill", tint: .secondary,
+                   text: "Habit reminders paused until \(CaptureModel.format(Date(timeIntervalSince1970: habitsPausedUntil))).") {
+                Button("Resume") { habitsPausedUntil = 0 }
+            }
+        }
         if let error = store.loadError ?? store.saveError {
             Banner(systemImage: "exclamationmark.octagon.fill", tint: .red, text: error) {
                 Button("Show") { NSWorkspace.shared.activateFileViewerSelecting([store.folder.url]) }
@@ -158,6 +241,7 @@ struct ContentView: View {
     private var captureBar: some View {
         HStack(spacing: 8) {
             TextField("Type a note, or ask about your notes", text: $typed, axis: .vertical)
+                .focused($focus, equals: .capture)
                 .lineLimit(1...4)
                 .padding(.vertical, 4)
                 .flatField()
@@ -277,10 +361,8 @@ struct ContentView: View {
 
     private var noteList: some View {
         let query = search.trimmingCharacters(in: .whitespaces).lowercased()
-        let items = store.notes(for: tab).filter {
-            query.isEmpty || "\($0.title) \($0.plainText) \($0.tag)".lowercased().contains(query)
-        }
-        return FitScrollView {
+        let items = visibleNotes
+        return ScrollViewReader { proxy in FitScrollView {
             if items.isEmpty {
                 VStack(spacing: 6) {
                     Image(systemName: query.isEmpty ? emptySymbol : "magnifyingglass")
@@ -301,7 +383,8 @@ struct ContentView: View {
             } else {
                 LazyVStack(spacing: 0) {
                     ForEach(items) { note in
-                        NoteRow(note: note, onEdit: { editing = note })
+                        NoteRow(note: note, isSelected: note.id == selection, onEdit: { editing = note })
+                            .id(note.id)
                         if note.id != items.last?.id {
                             VoiceStyle.separator.frame(height: 1).padding(.leading, 40).padding(.trailing, 16)
                         }
@@ -309,6 +392,10 @@ struct ContentView: View {
                 }
                 .padding(.vertical, 2)
             }
+        }
+        .onChange(of: selection) { _, id in
+            if let id { withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(id) } }
+        }
         }
     }
 
@@ -340,6 +427,7 @@ struct ContentView: View {
 extension Notification.Name {
     /// Asks an open editor to save its changes (popover closing, Back, recording starting).
     static let commitEdits = Notification.Name("VoiceNotesCommitEdits")
+    static let popoverDidShow = Notification.Name("VoiceNotesPopoverDidShow")
 }
 
 private enum AVAuthorizationHelper {
@@ -374,6 +462,7 @@ struct NoteRow: View {
     @EnvironmentObject var store: NoteStore
     @EnvironmentObject var capture: CaptureModel
     let note: Note
+    var isSelected = false
     let onEdit: () -> Void
     @State private var hovering = false
 
@@ -414,7 +503,7 @@ struct NoteRow: View {
         // Circle at x 16, text at x 40 (Penpot), with the hover highlight inset 6pt.
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(hovering ? VoiceStyle.hover : .clear, in: RoundedRectangle(cornerRadius: 6))
+        .background(hovering || isSelected ? VoiceStyle.hover : .clear, in: RoundedRectangle(cornerRadius: 6))
         .overlay(alignment: .topTrailing) {
             // Hover actions float over the row so nothing reflows.
             if hovering { actionButtons.padding(6) }
@@ -874,6 +963,18 @@ struct SettingsView: View {
     @AppStorage(Prefs.speakReminders) private var speakReminders = true
     @AppStorage(Prefs.model) private var model = "gemma4"
     @AppStorage(Prefs.autoStop) private var autoStop = true
+    @AppStorage(Prefs.briefingEnabled) private var briefingEnabled = false
+    @AppStorage(Prefs.briefingMinute) private var briefingMinute = 8 * 60 + 30
+
+    private var briefingTime: Binding<Date> {
+        Binding(
+            get: { Calendar.current.date(bySettingHour: briefingMinute / 60, minute: briefingMinute % 60,
+                                         second: 0, of: Date())! },
+            set: {
+                let parts = Calendar.current.dateComponents([.hour, .minute], from: $0)
+                briefingMinute = parts.hour! * 60 + parts.minute!
+            })
+    }
     @State private var voices: [String] = []
     @State private var launchAtLogin = SMAppService.mainApp.status != .notRegistered
     @State private var loginError: String?
@@ -916,6 +1017,19 @@ struct SettingsView: View {
                     }
                     .disabled(!speakReminders)
                     Toggle("Ring reminders on this Mac", isOn: $ringOnThisMac)
+                }
+                Divider()
+                section("Daily Briefing") {
+                    Toggle("Speak a summary of my day", isOn: $briefingEnabled)
+                    HStack {
+                        Text("At")
+                        DatePicker("Time", selection: briefingTime, displayedComponents: .hourAndMinute)
+                            .labelsHidden()
+                        Spacer()
+                        Button("Play Now") { Speaker.shared.say(Briefing.text(for: store.notes)) }
+                    }
+                    .disabled(!briefingEnabled)
+                    caption("Today's reminders, anything still open and your habits — read aloud once a day when you're at your Mac.")
                 }
                 Divider()
                 section("Sync Across Macs") {

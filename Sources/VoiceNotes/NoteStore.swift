@@ -22,6 +22,8 @@ final class NoteStore: ObservableObject {
     var context: () -> UserContext = { .active }
     /// Whether another app is using the camera or mic. Costlier, so asked only when a habit is due.
     var isInCall: () -> Bool = { false }
+    /// When set and in the future, habit reminders wait ("pause habits until 3").
+    var habitsPausedUntil: () -> Date? = { nil }
 
     /// All records including tombstones, by id.
     private var records: [UUID: Note] = [:]
@@ -163,6 +165,13 @@ final class NoteStore: ObservableObject {
         }
     }
 
+    func setItem(_ itemID: UUID, in id: UUID, done: Bool) {
+        mutate(id) { note in
+            guard let i = note.items.firstIndex(where: { $0.id == itemID }) else { return }
+            note.items[i].done = done
+        }
+    }
+
     func markDone(_ id: UUID) {
         if note(id: id)?.isRepeating == true { return completeOccurrence(id) }
         mutate(id) { $0.isDone = true }
@@ -221,7 +230,8 @@ final class NoteStore: ObservableObject {
                 mutate(note.id) { $0.remindAt = rule.nextActive(from: now) }
                 continue
             }
-            // Habit reminders wait for a good moment: not to an empty room, not mid-call.
+            // Habit reminders wait for a good moment: not paused, not to an empty room, not mid-call.
+            if let until = habitsPausedUntil(), until > now { continue }
             if away { continue }
             if now.timeIntervalSince(note.remindAt!) < Self.maxCallDeferral && (context.inCall || isInCall()) {
                 continue

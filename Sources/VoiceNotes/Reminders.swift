@@ -41,6 +41,14 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         )
     }
 
+    func postBriefing(_ text: String) {
+        let content = UNMutableNotificationContent()
+        content.title = "Today"
+        content.body = text
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: "briefing-\(Briefing.dayKey(Date()))", content: content, trigger: nil))
+    }
+
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification

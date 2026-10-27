@@ -3,6 +3,9 @@
 ## 1.1.0
 - **Smart repeating reminders** — "drink water every 10–20 minutes", "get up and walk frequently". Random or fixed intervals, active hours and weekdays; "time at your Mac" reminders restart after a break; habit nudges wait while you're away or on a call; Done counts ("6 today") and keeps repeating.
 - **Ask your notes** — type or say a question ("what's the wifi password at mom's?") and get an answer from your notes, locally.
+- **Commands** — "mark milk done", "I drank water", "snooze water for an hour", "delete the dentist note", "pause habits until 3".
+- **Daily briefing** (optional) — a spoken summary of today's reminders, anything still open, and your habits, once a day at a time you choose.
+- **Keyboard control** — ↑/↓ to select, Space to complete, Return to edit, ⌫ to delete, ⌘F search, ⌘1–3 tabs; just start typing to add a note.
 - **Checklists** — "buy milk, eggs, bread and coffee" becomes a tickable list; tick items right in the list or edit them in the editor.
 - **macOS-native redesign** from Penpot designs: compact popover that fits its content, flat controls, Reminders-style rows, in-popover editor and settings; waveform menu bar icon.
 - Copy/paste and other edit shortcuts work in all text fields; the popover saves edits when it closes on its own.

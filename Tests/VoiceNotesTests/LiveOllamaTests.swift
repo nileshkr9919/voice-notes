@@ -58,6 +58,32 @@ final class LiveOllamaTests: XCTestCase {
         XCTAssertTrue(unknown.lowercased().contains("couldn't find"), unknown)
     }
 
+    func testUnderstandsCommands() async throws {
+        guard case .command = try await Ollama.interpret("mark milk as done", model: "gemma4")
+        else { return XCTFail("expected a command") }
+        guard case .command = try await Ollama.interpret("pause habits until 3", model: "gemma4")
+        else { return XCTFail("expected a command") }
+
+        var groceries = Note(title: "Groceries", body: "Groceries", tag: "shopping")
+        groceries.items = [ChecklistItem(text: "Eggs"), ChecklistItem(text: "Milk")]
+        let water = Note(title: "Drink water", body: "", tag: "health",
+                         repeatRule: RepeatRule(minMinutes: 20, maxMinutes: 20))
+        let notes = [water, groceries]
+
+        let tick = try await Ollama.command("mark milk as done", notes: notes, model: "gemma4")
+        XCTAssertEqual(tick.action, .complete)
+        XCTAssertEqual(tick.noteNumber, 2)
+        XCTAssertEqual(tick.itemNumber, 2)
+
+        let drank = try await Ollama.command("I drank water", notes: notes, model: "gemma4")
+        XCTAssertEqual(drank.action, .complete)
+        XCTAssertEqual(drank.noteNumber, 1)
+
+        let snooze = try await Ollama.command("snooze water for an hour", notes: notes, model: "gemma4")
+        XCTAssertEqual(snooze.action, .snooze)
+        XCTAssertEqual(snooze.minutes, 60)
+    }
+
     func testMissingModelIsReported() async {
         do {
             _ = try await Ollama.parse("hello", model: "no-such-model-xyz")

@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var hotKey: HotKey?
     private var cancellables: Set<AnyCancellable> = []
     private var reminderActivity: NSObjectProtocol?
+    private var briefingTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Prefs.register()
@@ -24,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         store.ringsOnThisDevice = { UserDefaults.standard.bool(forKey: Prefs.ringOnThisMac) }
         store.context = { UserContext.current() }
         store.isInCall = { UserContext.captureDeviceInUse() }
+        store.habitsPausedUntil = { Prefs.pausedUntil }
         notifier = Notifier(store: store)
         notifier.onOpen = { [weak self] in self?.showPopover() }
         store.onDue = { [weak self] due in
@@ -91,6 +93,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
         store.checkDue()
         Task { await capture.refreshHealth() }
+
+        // Daily briefing: checked every 30 s; given once a day when the person is at the Mac.
+        let briefingTimer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.giveBriefingIfDue() }
+        }
+        RunLoop.main.add(briefingTimer, forMode: .common)
+        self.briefingTimer = briefingTimer
     }
 
     func popoverDidClose(_ notification: Notification) {
@@ -114,6 +123,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             popover.contentViewController?.view.window?.makeKey()
             // Open calm, like the design: no field focused (and no focus ring) until clicked.
             popover.contentViewController?.view.window?.makeFirstResponder(nil)
+            NotificationCenter.default.post(name: .popoverDidShow, object: nil)
             store.reload() // pick up notes synced from other Macs
         }
         Task { await capture.refreshHealth() }
@@ -164,6 +174,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         image.accessibilityDescription = recording ? "Voice Notes – listening" : "Voice Notes"
         image.isTemplate = true
         return image
+    }
+
+    private func giveBriefingIfDue(now: Date = Date()) {
+        let defaults = UserDefaults.standard
+        guard Briefing.isDue(now: now, enabled: defaults.bool(forKey: Prefs.briefingEnabled),
+                             minuteOfDay: defaults.integer(forKey: Prefs.briefingMinute),
+                             lastDay: defaults.string(forKey: Prefs.lastBriefingDay)) else { return }
+        // Wait until someone is actually at the Mac.
+        let context = UserContext.current()
+        guard !context.screenLocked, context.idleSeconds < NoteStore.awayAfter else { return }
+        defaults.set(Briefing.dayKey(now), forKey: Prefs.lastBriefingDay)
+        let text = Briefing.text(for: store.notes, now: now)
+        notifier.postBriefing(text)
+        Speaker.shared.say(text)
     }
 
     private func updateBadge() {

@@ -29,17 +29,35 @@ enum Ollama {
         var `repeat`: ParsedRepeat? = nil
         var items: [String]? = nil
         var isQuestion: Bool? = nil
+        var isCommand: Bool? = nil
+    }
+
+    /// A change to existing notes, decided by the model ("mark milk done", "pause habits until 3").
+    struct NoteCommand: Decodable, Equatable {
+        enum Action: String, Decodable, CaseIterable {
+            case complete, uncomplete, snooze, delete, pauseHabits, resumeHabits, none
+        }
+        var action: Action
+        /// 1-based position in the numbered note list given to the model.
+        var noteNumber: Int?
+        /// 1-based checklist item within that note.
+        var itemNumber: Int?
+        var minutes: Int?
+        /// Local "yyyy-MM-ddTHH:mm".
+        var until: String?
     }
 
     /// What the user meant: a new note, or a question about their existing notes.
     enum Interpretation {
         case note(Note)
         case question
+        case command
     }
 
     /// Reads dictated or typed text as either a new note or a question about the notes.
     static func interpret(_ text: String, model: String, now: Date = Date()) async throws -> Interpretation {
         let parsed = try await requestParse(text, model: model, now: now)
+        if parsed.isCommand == true { return .command }
         if parsed.isQuestion == true { return .question }
         return .note(makeNote(from: parsed, original: text, now: now))
     }
@@ -68,6 +86,7 @@ enum Ollama {
                 "tag": ["type": "string", "enum": tags],
                 "items": ["type": ["array", "null"], "items": ["type": "string"]],
                 "isQuestion": ["type": "boolean"],
+                "isCommand": ["type": "boolean"],
                 "repeat": [
                     "type": ["object", "null"],
                     "properties": [
@@ -81,7 +100,7 @@ enum Ollama {
                     "required": ["minMinutes", "maxMinutes", "activeTimeOnly", "startTime", "endTime", "days"],
                 ],
             ],
-            "required": ["isQuestion", "title", "body", "remindAt", "tag", "repeat", "items"],
+            "required": ["isCommand", "isQuestion", "title", "body", "remindAt", "tag", "repeat", "items"],
         ]
         let payload: [String: Any] = [
             "model": model,
@@ -106,6 +125,62 @@ enum Ollama {
             throw OllamaError.badResponse(String(decoding: data.prefix(200), as: UTF8.self))
         }
         return parsed
+    }
+
+    /// Works out which notes a command refers to and what to do with them.
+    static func command(_ text: String, notes: [Note], model: String, now: Date = Date()) async throws -> NoteCommand {
+        let local = DateFormatter()
+        local.locale = Locale(identifier: "en_US_POSIX")
+        local.timeZone = Calendar.current.timeZone
+        local.dateFormat = "yyyy-MM-dd'T'HH:mm"
+        let list = notes.enumerated().map { index, note in
+            var line = "\(index + 1). \(note.title)"
+            if note.isRepeating { line += " (habit)" }
+            if note.isDone { line += " (done)" }
+            if note.isChecklist {
+                line += " — items: " + note.items.enumerated()
+                    .map { "\($0.offset + 1) \($0.element.text)\($0.element.done ? " (done)" : "")" }
+                    .joined(separator: ", ")
+            }
+            return line
+        }.joined(separator: "\n")
+        let system = """
+        The user wants to change their notes. Current local date-time: \(local.string(from: now)).
+        Pick the action and the note it refers to from this numbered list:
+        \(list.isEmpty ? "(no notes)" : list)
+
+        - action: complete (mark a note, habit or checklist item done; "I drank water" completes the water habit), uncomplete, snooze, delete, pauseHabits, resumeHabits, or none if nothing matches.
+        - noteNumber: the number of the matching note, or null for pauseHabits/resumeHabits/none.
+        - itemNumber: for a checklist item ("mark milk done" when Milk is an item), its number within that note; else null.
+        - minutes: for snooze or pause given as a duration ("for an hour" → 60); else null.
+        - until: for snooze or pause given as a time ("until 3" → today 15:00 if still ahead, else tomorrow), local "yyyy-MM-ddTHH:mm"; else null.
+        """
+        let schema: [String: Any] = [
+            "type": "object",
+            "properties": [
+                "action": ["type": "string", "enum": NoteCommand.Action.allCases.map(\.rawValue)],
+                "noteNumber": ["type": ["integer", "null"]],
+                "itemNumber": ["type": ["integer", "null"]],
+                "minutes": ["type": ["integer", "null"]],
+                "until": ["type": ["string", "null"]],
+            ],
+            "required": ["action", "noteNumber", "itemNumber", "minutes", "until"],
+        ]
+        let payload: [String: Any] = [
+            "model": model, "stream": false, "think": false, "format": schema, "keep_alive": "15m",
+            "options": ["temperature": 0],
+            "messages": [["role": "system", "content": system], ["role": "user", "content": text]],
+        ]
+        let data = try await send("api/chat", payload, model: model)
+        struct ChatResponse: Decodable {
+            struct Message: Decodable { let content: String }
+            let message: Message
+        }
+        guard let content = try? JSONDecoder().decode(ChatResponse.self, from: data).message.content,
+              let command = try? JSONDecoder().decode(NoteCommand.self, from: Data(content.utf8)) else {
+            throw OllamaError.badResponse(String(decoding: data.prefix(200), as: UTF8.self))
+        }
+        return command
     }
 
     /// Answers a question from the user's notes only. Runs locally like everything else.
@@ -221,6 +296,7 @@ enum Ollama {
 
         return """
         You turn a short spoken note into JSON.
+        - isCommand: true ONLY if the user asks to change notes they already have: mark something done or not done ("mark milk done", "I drank water", "done with the bank call"), snooze it ("snooze water for an hour"), delete it ("delete the dentist note"), or pause/resume habit reminders ("pause habits until 3", "resume habits"). False for new notes and reminders ("remind me to…").
         - isQuestion: true ONLY if the user is asking about something they saved earlier ("what's the wifi password at mom's?", "when is my dentist appointment?", "what do I need to buy?"); false when they are dictating a new note, list or reminder (including "remind me to…"). When true, fill the other fields minimally.
         Current local date-time: \(local.string(from: now)) (\(weekday)).
         Upcoming dates:

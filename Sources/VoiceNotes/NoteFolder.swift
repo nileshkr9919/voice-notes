@@ -21,16 +21,66 @@ struct NoteFolder {
         refreshVault()
     }
 
-    var isEncrypted: Bool { vault != nil }
-    var isLocked: Bool { vault != nil && key == nil }
+    /// This Mac's memory of which folders are encrypted (by vault id). The vault file in a
+    /// synced folder can't be trusted on its own: if it goes missing (deleted, or evicted to
+    /// an iCloud placeholder) that must never quietly switch this Mac to writing plain text.
+    private var rememberedID: UUID? { Self.keyStore.encryptedVault(forFolder: url.standardizedFileURL.path) }
 
-    /// Picks up encryption turned on or off by another Mac, and this Mac's key for it.
+    private func remember(_ id: UUID?) {
+        Self.keyStore.setEncryptedVault(id, forFolder: url.standardizedFileURL.path)
+    }
+
+    /// Notes are written encrypted while this Mac knows of a vault (an active one, or an
+    /// unproven "turned off" marker) or remembers the folder being encrypted.
+    var isEncrypted: Bool { vault != nil || rememberedID != nil }
+
+    var isLocked: Bool { isEncrypted && key == nil }
+
+    /// Picks up encryption turned on (or provably turned off) by another Mac.
     mutating func refreshVault() {
-        let current = (try? Data(contentsOf: url.appendingPathComponent(Vault.fileName)))
-            .flatMap { try? JSONDecoder().decode(Vault.self, from: $0) }
-        guard current != vault else { return }
-        vault = current
-        key = current.flatMap { vault in Self.keyStore.key(for: vault.id).flatMap { vault.accepts($0) ? $0 : nil } }
+        let file = url.appendingPathComponent(Vault.fileName)
+        let placeholder = url.appendingPathComponent(".\(Vault.fileName).icloud")
+        if FileManager.default.fileExists(atPath: placeholder.path) {
+            try? FileManager.default.startDownloadingUbiquitousItem(at: file)
+        }
+        let onDisk = (try? Data(contentsOf: file)).flatMap { try? JSONDecoder().decode(Vault.self, from: $0) }
+        let remembered = rememberedID
+
+        guard let onDisk else {
+            // Missing or unreadable vault: a plain folder only if this Mac never knew otherwise.
+            if let remembered, key == nil { key = Self.keyStore.key(for: remembered) }
+            if remembered == nil { vault = nil; key = nil }
+            return
+        }
+
+        if onDisk.isDisabled {
+            guard remembered != nil || vault.map({ !$0.isDisabled }) == true else {
+                vault = nil; key = nil // never encrypted here: just a plain folder
+                return
+            }
+            let candidate = key ?? Self.keyStore.key(for: onDisk.id)
+            if let candidate, onDisk.provesDisabled(with: candidate) {
+                forgetEncryption(id: onDisk.id) // turned off on another Mac, verifiably
+            } else {
+                vault = onDisk // unproven: stay encrypted; the passphrase can confirm it
+            }
+            return
+        }
+
+        if onDisk != vault {
+            vault = onDisk
+            if onDisk.id != remembered { remember(onDisk.id); key = nil }
+        }
+        if key == nil {
+            key = Self.keyStore.key(for: onDisk.id).flatMap { onDisk.accepts($0) ? $0 : nil }
+        }
+    }
+
+    private mutating func forgetEncryption(id: UUID) {
+        Self.keyStore.delete(for: id)
+        remember(nil)
+        vault = nil
+        key = nil
     }
 
     /// Turns encryption on for this folder. The caller then rewrites the notes.
@@ -42,29 +92,39 @@ struct NoteFolder {
     /// Uses an existing vault and key (e.g. when moving encrypted notes to another folder).
     mutating func adopt(_ vault: Vault, key: SymmetricKey) throws {
         try ensureExists()
-        try JSONEncoder().encode(vault).write(to: url.appendingPathComponent(Vault.fileName), options: .atomic)
-        Self.keyStore.save(key, for: vault.id)
-        self.vault = vault
+        var active = vault
+        active.disabled = nil
+        active.proof = nil
+        try JSONEncoder().encode(active).write(to: url.appendingPathComponent(Vault.fileName), options: .atomic)
+        Self.keyStore.save(key, for: active.id)
+        remember(active.id)
+        self.vault = active
         self.key = key
     }
 
     /// Unlocks an encrypted folder on this Mac. Returns false for a wrong passphrase.
+    /// If another Mac turned encryption off, the passphrase also confirms that.
     mutating func unlock(passphrase: String) -> Bool {
         guard let vault, let key = vault.key(for: passphrase) else { return false }
+        if vault.isDisabled {
+            guard vault.provesDisabled(with: key) else { return false }
+            forgetEncryption(id: vault.id)
+            return true
+        }
         Self.keyStore.save(key, for: vault.id)
         self.key = key
         return true
     }
 
-    /// Turns encryption off: writes every note back as plain JSON first, then removes the
-    /// encrypted copies, the vault and the key — so an interruption never loses notes.
+    /// Turns encryption off: writes every note back as plain JSON first, then replaces the
+    /// vault with an authenticated "turned off" marker and removes the encrypted copies —
+    /// so an interruption never loses notes, and other Macs can verify the change.
     mutating func removeEncryption(rewriting notes: [Note]) throws {
-        guard let vault else { return }
+        guard let vault, let key else { throw NoteCryptoError.locked }
         for note in notes { try writeFile(note, sealed: false) }
-        try? FileManager.default.removeItem(at: url.appendingPathComponent(Vault.fileName))
-        Self.keyStore.delete(for: vault.id)
-        self.vault = nil
-        self.key = nil
+        let marker = try vault.disabledMarker(key: key)
+        try JSONEncoder().encode(marker).write(to: url.appendingPathComponent(Vault.fileName), options: .atomic)
+        forgetEncryption(id: vault.id)
         let names = (try? FileManager.default.contentsOfDirectory(atPath: url.path)) ?? []
         for name in names where name.hasSuffix("." + Self.sealedExtension) {
             try? FileManager.default.removeItem(at: url.appendingPathComponent(name))

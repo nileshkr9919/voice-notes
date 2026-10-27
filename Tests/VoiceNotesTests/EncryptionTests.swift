@@ -102,7 +102,9 @@ final class EncryptedFolderTests: XCTestCase {
         try store.disableEncryption(passphrase: passphrase)
 
         let names = try files()
-        XCTAssertFalse(names.contains(Vault.fileName))
+        let marker = try JSONDecoder().decode(Vault.self, from: Data(contentsOf: folder.appendingPathComponent(Vault.fileName)))
+        XCTAssertTrue(marker.isDisabled, "an authenticated 'turned off' marker replaces the vault")
+        XCTAssertFalse(store.isEncrypted)
         XCTAssertTrue(names.filter { $0.hasSuffix(".vnote") }.isEmpty)
         XCTAssertEqual(names.filter { $0.hasSuffix(".json") }.count, 1)
         XCTAssertEqual(makeStore().notes.map(\.title), ["A"])
@@ -153,5 +155,62 @@ final class EncryptedFolderTests: XCTestCase {
         XCTAssertTrue(names.contains(Vault.fileName))
         XCTAssertTrue(names.filter { $0.hasSuffix(".json") }.isEmpty)
         XCTAssertEqual(store.notes.map(\.title), ["Private"])
+    }
+
+    // MARK: Downgrade protection
+
+    func testDeletedVaultFileDoesNotTurnOffEncryption() throws {
+        let store = makeStore()
+        try store.enableEncryption(passphrase: passphrase, iterations: 1000)
+        try FileManager.default.removeItem(at: folder.appendingPathComponent(Vault.fileName))
+
+        let restarted = makeStore() // e.g. after a relaunch, with the vault file gone or evicted
+        XCTAssertTrue(restarted.isEncrypted)
+        restarted.add(Note(title: "Still secret", body: "sunflower42", tag: "other"))
+        XCTAssertTrue(try files().filter { $0.hasSuffix(".json") }.isEmpty, "no plain text written")
+    }
+
+    func testForgedTurnOffMarkerIsIgnored() throws {
+        let store = makeStore()
+        try store.enableEncryption(passphrase: passphrase, iterations: 1000)
+        var forged = try JSONDecoder().decode(Vault.self, from: Data(contentsOf: folder.appendingPathComponent(Vault.fileName)))
+        forged.disabled = true // no valid proof: whoever wrote this doesn't have the key
+        try JSONEncoder().encode(forged).write(to: folder.appendingPathComponent(Vault.fileName))
+
+        store.reload()
+        XCTAssertTrue(store.isEncrypted)
+        XCTAssertFalse(store.isLocked)
+        store.add(Note(title: "Still secret", body: "", tag: "other"))
+        XCTAssertTrue(try files().filter { $0.hasSuffix(".json") }.isEmpty)
+    }
+
+    func testGenuineTurnOffOnAnotherMacIsFollowed() throws {
+        let macA = makeStore()
+        macA.add(Note(title: "A", body: "", tag: "other"))
+        try macA.enableEncryption(passphrase: passphrase, iterations: 1000)
+        let macB = makeStore() // same key store: B is unlocked
+        XCTAssertFalse(macB.isLocked)
+
+        try macA.disableEncryption(passphrase: passphrase)
+        macB.reload()
+        XCTAssertFalse(macB.isEncrypted)
+        macB.add(Note(title: "B", body: "", tag: "other"))
+        XCTAssertEqual(try files().filter { $0.hasSuffix(".json") }.count, 2)
+    }
+
+    func testLockedMacConfirmsTurnOffWithThePassphrase() throws {
+        let macA = makeStore()
+        macA.add(Note(title: "A", body: "", tag: "other"))
+        try macA.enableEncryption(passphrase: passphrase, iterations: 1000)
+        let macB = otherMac() // never unlocked
+        XCTAssertTrue(macB.isLocked)
+
+        NoteFolder.keyStore = MemoryKeyStore()
+        try macA.disableEncryption(passphrase: passphrase)
+        macB.reload()
+        XCTAssertTrue(macB.isLocked, "can't verify the turn-off without the key")
+        XCTAssertTrue(macB.unlock(passphrase: passphrase))
+        XCTAssertFalse(macB.isEncrypted)
+        XCTAssertEqual(macB.notes.map(\.title), ["A"])
     }
 }

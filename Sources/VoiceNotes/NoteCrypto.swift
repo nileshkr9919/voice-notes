@@ -15,6 +15,25 @@ struct Vault: Codable, Equatable {
     var iterations: Int
     /// A known value sealed with the key, to tell a right passphrase from a wrong one.
     var check: Data
+    /// Set when encryption was turned off. Only trusted with `proof`, which needs the key,
+    /// so deleting or forging the vault file can't make other Macs write plain text.
+    var disabled: Bool? = nil
+    var proof: Data? = nil
+
+    var isDisabled: Bool { disabled == true }
+
+    /// The authenticated "encryption turned off" marker left in place of the vault.
+    func disabledMarker(key: SymmetricKey) throws -> Vault {
+        var marker = self
+        marker.disabled = true
+        marker.proof = try NoteCrypto.seal(Data("disabled:\(id.uuidString)".utf8), key: key)
+        return marker
+    }
+
+    func provesDisabled(with key: SymmetricKey) -> Bool {
+        guard isDisabled, let proof, let opened = try? NoteCrypto.open(proof, key: key) else { return false }
+        return opened == Data("disabled:\(id.uuidString)".utf8)
+    }
 
     static let fileName = "vault.vnkey"
     static let defaultIterations = 600_000
@@ -86,11 +105,13 @@ enum NoteCrypto {
     }
 }
 
-/// Where this Mac keeps folder keys.
+/// Where this Mac keeps folder keys, and which folders it knows to be encrypted.
 protocol KeyStore {
     func key(for vault: UUID) -> SymmetricKey?
     func save(_ key: SymmetricKey, for vault: UUID)
     func delete(for vault: UUID)
+    func encryptedVault(forFolder path: String) -> UUID?
+    func setEncryptedVault(_ vault: UUID?, forFolder path: String)
 }
 
 /// Keys live in the login Keychain; other apps can't read them without the person's approval.
@@ -126,12 +147,28 @@ struct KeychainKeyStore: KeyStore {
     func delete(for vault: UUID) {
         SecItemDelete(query(vault) as CFDictionary)
     }
+
+    private static let foldersKey = "encryptedFolders"
+
+    func encryptedVault(forFolder path: String) -> UUID? {
+        (UserDefaults.standard.dictionary(forKey: Self.foldersKey) as? [String: String])?[path]
+            .flatMap(UUID.init(uuidString:))
+    }
+
+    func setEncryptedVault(_ vault: UUID?, forFolder path: String) {
+        var map = UserDefaults.standard.dictionary(forKey: Self.foldersKey) as? [String: String] ?? [:]
+        map[path] = vault?.uuidString
+        UserDefaults.standard.set(map, forKey: Self.foldersKey)
+    }
 }
 
 /// In-memory keys, for tests.
 final class MemoryKeyStore: KeyStore {
     private var keys: [UUID: SymmetricKey] = [:]
+    private var folders: [String: UUID] = [:]
     func key(for vault: UUID) -> SymmetricKey? { keys[vault] }
     func save(_ key: SymmetricKey, for vault: UUID) { keys[vault] = key }
     func delete(for vault: UUID) { keys[vault] = nil }
+    func encryptedVault(forFolder path: String) -> UUID? { folders[path] }
+    func setEncryptedVault(_ vault: UUID?, forFolder path: String) { folders[path] = vault }
 }

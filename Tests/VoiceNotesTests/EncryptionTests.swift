@@ -213,4 +213,32 @@ final class EncryptedFolderTests: XCTestCase {
         XCTAssertFalse(macB.isEncrypted)
         XCTAssertEqual(macB.notes.map(\.title), ["A"])
     }
+
+    func testTurnOffProofFromAnotherFolderIsNotAccepted() throws {
+        let store = makeStore()
+        store.add(Note(title: "Private", body: "", tag: "other"))
+        try store.enableEncryption(passphrase: passphrase, iterations: 1000)
+        let copy = folder.appendingPathComponent("copy")
+        let mover = makeStore(folder.appendingPathComponent("unused"))
+        _ = mover
+        // Same passphrase and key, but moved: the destination has its own vault id.
+        try store.changeFolder(to: copy)
+        let destVault = try JSONDecoder().decode(Vault.self, from: Data(contentsOf: copy.appendingPathComponent(Vault.fileName)))
+
+        // Turn encryption off in a separate folder using the same key, then replay its proof into `copy`.
+        let other = folder.appendingPathComponent("other")
+        let otherStore = makeStore(other)
+        try otherStore.changeFolder(to: other)
+        var source = NoteFolder(url: other)
+        try source.adopt(destVault, key: try XCTUnwrap(NoteFolder(url: copy).key))
+        try source.removeEncryption(rewriting: [])
+        let replay = try Data(contentsOf: other.appendingPathComponent(Vault.fileName))
+        try replay.write(to: copy.appendingPathComponent(Vault.fileName))
+
+        store.reload()
+        XCTAssertTrue(store.isEncrypted, "a proof made for another folder doesn't turn this one off")
+        store.add(Note(title: "After replay", body: "", tag: "other"))
+        let names = try FileManager.default.contentsOfDirectory(atPath: copy.path)
+        XCTAssertTrue(names.filter { $0.hasSuffix(".json") }.isEmpty)
+    }
 }

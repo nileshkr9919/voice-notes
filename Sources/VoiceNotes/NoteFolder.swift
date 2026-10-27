@@ -58,8 +58,10 @@ struct NoteFolder {
                 vault = nil; key = nil // never encrypted here: just a plain folder
                 return
             }
+            // The marker must be for this folder's own vault (no replays from other folders).
+            let expected = remembered ?? vault?.id
             let candidate = key ?? Self.keyStore.key(for: onDisk.id)
-            if let candidate, onDisk.provesDisabled(with: candidate) {
+            if onDisk.id == expected, let candidate, onDisk.provesDisabled(with: candidate) {
                 forgetEncryption(id: onDisk.id) // turned off on another Mac, verifiably
             } else {
                 vault = onDisk // unproven: stay encrypted; the passphrase can confirm it
@@ -89,10 +91,13 @@ struct NoteFolder {
         try adopt(vault, key: key)
     }
 
-    /// Uses an existing vault and key (e.g. when moving encrypted notes to another folder).
+    /// Uses an existing vault's passphrase and key (e.g. when moving encrypted notes to another
+    /// folder). The folder gets its own vault id, so a "turned off" proof from one folder can't
+    /// be replayed in another, and turning one off never deletes the key another one uses.
     mutating func adopt(_ vault: Vault, key: SymmetricKey) throws {
         try ensureExists()
         var active = vault
+        active.id = UUID()
         active.disabled = nil
         active.proof = nil
         try JSONEncoder().encode(active).write(to: url.appendingPathComponent(Vault.fileName), options: .atomic)
@@ -107,7 +112,7 @@ struct NoteFolder {
     mutating func unlock(passphrase: String) -> Bool {
         guard let vault, let key = vault.key(for: passphrase) else { return false }
         if vault.isDisabled {
-            guard vault.provesDisabled(with: key) else { return false }
+            guard vault.id == (rememberedID ?? vault.id), vault.provesDisabled(with: key) else { return false }
             forgetEncryption(id: vault.id)
             return true
         }

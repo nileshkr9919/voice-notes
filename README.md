@@ -1,36 +1,55 @@
-<p align="center"><img src="Resources/icon.png" width="128" alt="Voice Notes icon"></p>
+<p align="center"><img src="Resources/icon.png" width="112" alt="Voice Notes icon"></p>
 
-# Voice Notes
+<h1 align="center">Voice Notes</h1>
 
-**Sticky notes you speak — free, private and fully on your Mac.**
+<p align="center"><b>Sticky notes you speak. Smart reminders. 100% on your Mac.</b><br>
+A free, open-source menu bar app powered by a local AI — no account, no cloud, no subscription.</p>
 
-Voice Notes lives in your menu bar. Press **⌥⇧N**, say what's on your mind, and it becomes a tidy note — with a reminder if you mentioned a time. A local AI (via [Ollama](https://ollama.com)) does the understanding, so there are no accounts, no subscriptions and no cloud.
+<p align="center">
+  <a href="https://github.com/nileshkr9919/voice-notes/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/nileshkr9919/voice-notes?color=2b7de9"></a>
+  <a href="https://github.com/nileshkr9919/voice-notes/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/nileshkr9919/voice-notes/actions/workflows/ci.yml/badge.svg"></a>
+  <img alt="macOS 14+" src="https://img.shields.io/badge/macOS-14%2B-black?logo=apple">
+  <img alt="Runs locally with Ollama" src="https://img.shields.io/badge/AI-local%20via%20Ollama-6e56cf">
+  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-green"></a>
+</p>
 
-> "Remind me to pay rent tomorrow" → **Pay rent** · finance · tomorrow 9:00 AM
-> "Dentist appointment Friday at 4" → **Dentist appointment** · health · Fri 4:00 PM
-> "Buy milk eggs and bread" → **Groceries to buy** · shopping
+<p align="center"><img src="docs/images/hero.jpg" width="760" alt="Voice Notes popover in light and dark mode"></p>
 
-## Install (no technical knowledge needed)
+Press **⌥⇧N** anywhere, say what's on your mind, and it becomes a tidy note — with a reminder if you mentioned a time, a checklist if you listed things, or a repeating nudge if it's a habit. A local AI ([Ollama](https://ollama.com)) does the understanding, so your notes never leave your Mac.
 
-1. Open **Terminal** (press ⌘-Space, type `Terminal`, press Return).
-2. Paste this line and press Return:
-   ```sh
-   curl -fsSL https://raw.githubusercontent.com/nileshkr9919/voice-notes/main/install.sh | zsh
-   ```
-3. Wait for **All set!** The first install downloads about 11 GB of AI models, so it can take a while.
-4. Click **Allow** when macOS asks for Microphone, Speech Recognition and Notifications.
+> "Remind me to call the bank tomorrow at 11" → **Call the bank** · tomorrow 11:00 AM
+> "Buy milk, eggs, bread and coffee" → **Groceries** ☐ Milk ☐ Eggs ☐ Bread ☐ Coffee
+> "Drink water every 10–20 minutes" → **Drink water** · repeats, only while you're at your Mac
+> "What's the Wi-Fi password at Mom's?" → *"It's sunflower42."* — answered from your notes
+> "Mark milk done" · "Snooze water for an hour" · "Pause habits until 3"
 
-You don't need anything installed beforehand. The installer sets up Ollama, downloads the models, and installs a ready-made Voice Notes app into your Applications folder. To update, run the same line again.
+## Install
 
-**Requirements:** macOS 14 Sonoma or later, about 15 GB free disk space, and 16 GB of memory recommended (8 GB works with a smaller model: `MODEL=llama3.2` before `zsh` in the command above).
+Open **Terminal** (⌘-Space → "Terminal"), paste this and press Return:
 
-## Using it
-- **Capture:** click the menu bar icon, or press **⌥⇧N** anywhere. Listening stops when you pause (or press ⌥⇧N again). You can also type.
-- **Habits:** "remind me to drink water every 10–20 minutes" or "get up and walk frequently" repeat smartly: only during active hours, never while you're away or on a call, and walk reminders count only time at your Mac.
-- **Checklists:** "buy milk, eggs, bread and coffee" becomes a list you can tick off right in the popover.
-- **Reminders:** a notification with **Snooze** and **Done**, read aloud in one of 38 voices (Settings → Voice). The menu bar shows how many reminders need attention.
-- **Find notes:** Reminders / Notes / Done tabs and search. Double-click to edit; right-click to snooze, reschedule, copy or delete (with undo).
-- **Turn on Settings → Open at login** so reminders always fire.
+```sh
+curl -fsSL https://raw.githubusercontent.com/nileshkr9919/voice-notes/main/install.sh | zsh
+```
+
+That's it — nothing needs to be installed first. The installer sets up Ollama, downloads the AI models (about 11 GB, first time only), installs Voice Notes into your Applications folder and opens it. Click **Allow** when macOS asks for Microphone, Speech Recognition and Notifications. Run the same line again to update.
+
+**Requirements:** macOS 14 Sonoma or later · ~15 GB free disk · 16 GB memory recommended (on 8 GB, use a smaller model: `curl … | MODEL=llama3.2 zsh`).
+
+## Features
+
+- 🎙 **Speak or type** — ⌥⇧N from anywhere; listening stops when you pause. Or just start typing when the popover is open.
+- ⏰ **Reminders that understand you** — "tomorrow at 9", "Friday at 4", "in 20 minutes", "tonight". Notifications with Snooze and Done, read aloud in one of 38 voices. They still appear even if the app is quit.
+- 💧 **Smart habits** — "drink water every 10–20 minutes", "get up and walk frequently". Active hours and weekdays; never while you're away, on a call, or after a break you already took. Done counts ("6 today") and keeps going.
+- ✅ **Checklists** — spoken lists become tickable items, right in the menu bar.
+- 🔎 **Ask your notes** — questions are answered from your notes, locally.
+- 🗣 **Commands** — "mark milk done", "I drank water", "snooze water for an hour", "delete the dentist note", "pause habits until 3".
+- ☀️ **Daily briefing** (optional) — a spoken summary of today's reminders and habits each morning.
+- 🔁 **Sync across your Macs** through iCloud Drive, Dropbox or any synced folder — no server.
+- 🔐 **Optional end-to-end encryption** — AES-256-GCM with a passphrase; your sync provider sees only ciphertext.
+- ⌨️ **Keyboard-first** — ↑/↓, Space to complete, Return to edit, ⌫ to delete, ⌘F to search.
+- 🍏 **Native macOS** — SwiftUI, light and dark mode, VoiceOver labels, tiny footprint.
+
+<p align="center"><img src="docs/images/screens.jpg" width="760" alt="Editor with repeat options, checklist editor, and settings"></p>
 
 ## Sync across your Macs
 Voice Notes doesn't run a server. Instead it can keep notes in a folder that your existing sync service shares:

@@ -152,7 +152,7 @@ fi
 ok "Voice Notes installed in $APPS"
 
 print -P "
-%F{green}%BAll set!%b%f Voice Notes is in your menu bar (the note icon, top right of the screen).
+%F{green}%BAll set!%b%f Voice Notes is in your menu bar (the waveform icon, top right of the screen).
 
   • Press %B⌥⇧N%b (Option-Shift-N) anywhere and say a note, e.g.
     “remind me to call Mom tomorrow at 6”.

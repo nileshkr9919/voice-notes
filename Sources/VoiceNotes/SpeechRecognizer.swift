@@ -20,6 +20,8 @@ final class SpeechRecognizer: ObservableObject {
 
     @Published private(set) var transcript = ""
     @Published private(set) var isRecording = false
+    /// True while macOS may be showing the Microphone / Speech Recognition prompt.
+    @Published private(set) var isRequestingPermission = false
     @Published var failure: Failure?
 
     /// Called when the speaker pauses long enough that the note seems finished.
@@ -53,10 +55,12 @@ final class SpeechRecognizer: ObservableObject {
         gotFinalResult = false
         self.autoStop = autoStop
 
+        isRequestingPermission = true
         let speechOK = await withCheckedContinuation { cont in
             SFSpeechRecognizer.requestAuthorization { cont.resume(returning: $0 == .authorized) }
         }
         let micOK = await AVCaptureDevice.requestAccess(for: .audio)
+        isRequestingPermission = false
         guard speechOK, micOK else {
             failure = .permissionDenied
             return

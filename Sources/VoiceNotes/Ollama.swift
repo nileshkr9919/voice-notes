@@ -26,6 +26,17 @@ enum Ollama {
         let body: String
         let remindAt: String?
         let tag: String
+        var `repeat`: ParsedRepeat? = nil
+        var items: [String]? = nil
+    }
+
+    struct ParsedRepeat: Decodable {
+        let minMinutes: Int
+        let maxMinutes: Int
+        let activeTimeOnly: Bool?
+        let startTime: String?
+        let endTime: String?
+        let days: [String]?
     }
 
     /// Turns raw dictated text into a structured note.
@@ -37,8 +48,21 @@ enum Ollama {
                 "body": ["type": "string"],
                 "remindAt": ["type": ["string", "null"]],
                 "tag": ["type": "string", "enum": tags],
+                "items": ["type": ["array", "null"], "items": ["type": "string"]],
+                "repeat": [
+                    "type": ["object", "null"],
+                    "properties": [
+                        "minMinutes": ["type": "integer"],
+                        "maxMinutes": ["type": "integer"],
+                        "activeTimeOnly": ["type": "boolean"],
+                        "startTime": ["type": ["string", "null"]],
+                        "endTime": ["type": ["string", "null"]],
+                        "days": ["type": ["array", "null"], "items": ["type": "string", "enum": weekdayNames]],
+                    ],
+                    "required": ["minMinutes", "maxMinutes", "activeTimeOnly", "startTime", "endTime", "days"],
+                ],
             ],
-            "required": ["title", "body", "remindAt", "tag"],
+            "required": ["title", "body", "remindAt", "tag", "repeat", "items"],
         ]
         let payload: [String: Any] = [
             "model": model,
@@ -68,13 +92,47 @@ enum Ollama {
     static func makeNote(from parsed: ParsedNote, original: String, now: Date) -> Note {
         let body = parsed.body.trimmingCharacters(in: .whitespacesAndNewlines)
         let title = parsed.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        return Note(
+        var note = Note(
             title: title.isEmpty ? String(original.prefix(40)) : title,
             body: body.isEmpty ? original : body,
             tag: tags.contains(parsed.tag) ? parsed.tag : "other",
             remindAt: normalizeReminder(parseDate(parsed.remindAt), now: now),
             createdAt: now
         )
+        let items = (parsed.items ?? [])
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        if items.count >= 2 {
+            note.items = items.map { ChecklistItem(text: $0) }
+        }
+        if let rule = parsed.repeat.flatMap(makeRule) {
+            note.repeatRule = rule
+            note.remindAt = rule.nextOccurrence(after: now)
+        }
+        return note
+    }
+
+    static let weekdayNames = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"]
+
+    static func makeRule(_ parsed: ParsedRepeat) -> RepeatRule? {
+        // Sanity limits: at least every minute, at most once a week.
+        let low = min(max(parsed.minMinutes, 1), 7 * 24 * 60)
+        let high = min(max(parsed.maxMinutes, low), 7 * 24 * 60)
+        guard parsed.minMinutes > 0 || parsed.maxMinutes > 0 else { return nil }
+        let days = parsed.days?.compactMap { weekdayNames.firstIndex(of: $0.lowercased()).map { $0 + 1 } }
+        return RepeatRule(
+            minMinutes: low, maxMinutes: high,
+            activeTimeOnly: parsed.activeTimeOnly ?? false,
+            startMinute: minuteOfDay(parsed.startTime), endMinute: minuteOfDay(parsed.endTime),
+            weekdays: (days?.isEmpty ?? true) || days?.count == 7 ? nil : days?.sorted()
+        )
+    }
+
+    /// "09:30" → 570.
+    static func minuteOfDay(_ s: String?) -> Int? {
+        guard let parts = s?.split(separator: ":").compactMap({ Int($0) }), parts.count == 2,
+              (0..<24).contains(parts[0]), (0..<60).contains(parts[1]) else { return nil }
+        return parts[0] * 60 + parts[1]
     }
 
     static func systemPrompt(now: Date) -> String {
@@ -97,6 +155,12 @@ enum Ollama {
         - title: short summary, at most 6 words.
         - body: the full note, cleaned up (fix punctuation, drop filler words like "remind me to"), keep every detail.
         - remindAt: set it whenever the note mentions ANY day or time (an appointment, a deadline, "remind me", "on Friday at 4"). ISO-8601 date-time with the same UTC offset as the current time, always in the future. Use the upcoming dates list for weekdays. A day without a time means 09:00. "in 20 minutes" is relative to now. "tonight" means 20:00. If no day or time is mentioned, null.
+        - repeat: ONLY for recurring reminders/habits ("every 20 minutes", "every hour", "regularly", "frequently", "throughout the day", "keep reminding me"); otherwise null. When set, remindAt is null.
+          - minMinutes/maxMinutes: the gap. "every 10-20 minutes" → 10 and 20. A fixed interval uses the same number for both. Vague wording: drink water/hydrate "frequently/regularly" → 30 and 45; get up, walk, stretch, move, posture, rest your eyes, take a break "frequently/regularly" → 45 and 60; anything else vague → 60 and 60.
+          - activeTimeOnly: true for reminders about breaking up sitting or screen time (get up, walk, stretch, move, posture, rest your eyes, take a break), since the timer should only count time at the computer; false otherwise (e.g. drink water, take medicine).
+          - startTime/endTime: "HH:mm" if the user limits the hours ("during work hours" → 09:00 and 18:00, "in the morning" → 08:00 and 12:00), else null.
+          - days: weekday codes if limited ("on weekdays" / "during work hours" → mon tue wed thu fri), else null.
+        - items: when the note lists several separate things to buy, pack, do or remember ("buy milk, eggs and bread", "pack passport, charger, headphones", "to do: call bank, email Sam, book flights"), one short item each, capitalized, without the verb repeated ("Milk", "Eggs", "Bread"); the title names the list ("Groceries", "Packing list", "To-dos") and body is a short summary or the title. Otherwise null. A single task is NOT a list.
         - tag: personal (family, home, chores, passwords, general life), work (job, office, clients, meetings), shopping (things to buy), health (doctor, medicine, exercise), finance (bills, bank, money, rent), idea (thoughts, plans, inspiration), other.
         """
     }

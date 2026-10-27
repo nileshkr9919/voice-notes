@@ -97,8 +97,7 @@ struct NoteFolder {
         let e = JSONEncoder()
         e.dateEncodingStrategy = .custom { date, encoder in
             var c = encoder.singleValueContainer()
-            try c.encode(date.formatted(.iso8601.year().month().day().time(includingFractionalSeconds: true)
-                .timeZone(separator: .omitted)))
+            try c.encode(iso8601Milliseconds(date))
         }
         e.outputFormatting = [.prettyPrinted, .sortedKeys]
         return e
@@ -120,7 +119,27 @@ struct NoteFolder {
     }()
 
     /// Now, rounded to the millisecond precision that's stored on disk.
-    static var now: Date {
-        Date(timeIntervalSince1970: (Date().timeIntervalSince1970 * 1000).rounded() / 1000)
+    static var now: Date { roundedToMillisecond(Date()) }
+
+    /// One millisecond after `date`, so an edit always sorts after the version it replaces.
+    static func justAfter(_ date: Date) -> Date {
+        Date(timeIntervalSince1970: (milliseconds(date) + 1) / 1000)
+    }
+
+    static func roundedToMillisecond(_ date: Date) -> Date {
+        Date(timeIntervalSince1970: milliseconds(date) / 1000)
+    }
+
+    private static func milliseconds(_ date: Date) -> Double {
+        (date.timeIntervalSince1970 * 1000).rounded()
+    }
+
+    /// "2026-10-27T18:04:05.123Z", written from whole milliseconds. (Formatters truncate,
+    /// which could make an edit made 1 ms later look the same age as the one it replaced.)
+    private static func iso8601Milliseconds(_ date: Date) -> String {
+        let ms = Int64(milliseconds(date))
+        let seconds = Date(timeIntervalSince1970: TimeInterval(ms.quotientAndRemainder(dividingBy: 1000).quotient))
+        let whole = ISO8601DateFormatter().string(from: seconds) // ends in "Z"
+        return whole.dropLast() + String(format: ".%03lldZ", ms % 1000)
     }
 }

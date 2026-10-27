@@ -17,8 +17,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Prefs.register()
+        // Menu bar apps have no visible menu, but key equivalents like ⌘C/⌘V/⌘Z
+        // only reach text fields through an Edit menu, so install a hidden one.
+        NSApp.mainMenu = Self.makeMainMenu()
 
         store.ringsOnThisDevice = { UserDefaults.standard.bool(forKey: Prefs.ringOnThisMac) }
+        store.context = { UserContext.current() }
         notifier = Notifier(store: store)
         notifier.onOpen = { [weak self] in self?.showPopover() }
         store.onDue = { [weak self] due in
@@ -47,7 +51,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         // Swap the icon while the microphone is live, so it's obvious when we're listening.
         speech.$isRecording
             .receive(on: RunLoop.main)
-            .sink { [weak self] in self?.updateIcon(recording: $0) }
+            .sink { [weak self] recording in
+                self?.updateIcon(recording: recording)
+                // Always show the live transcript and Stop button while the mic is on.
+                if recording, let self, !self.popover.isShown { self.showPopover() }
+            }
             .store(in: &cancellables)
         // Show how many reminders have gone off and still need attention.
         store.$notes
@@ -57,13 +65,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
         popover.behavior = .transient
         popover.delegate = self
-        popover.contentSize = NSSize(width: 380, height: 560)
-        popover.contentViewController = NSHostingController(
+        let hosting = NSHostingController(
             rootView: ContentView()
                 .environmentObject(store)
                 .environmentObject(speech)
                 .environmentObject(capture)
         )
+        hosting.sizingOptions = .preferredContentSize // the popover follows the content's height
+        popover.contentViewController = hosting
 
         // ⌥⇧N: open and start listening straight away; press again to save.
         hotKey = HotKey(keyCode: kVK_ANSI_N, modifiers: optionKey | shiftKey) { [weak self] in
@@ -74,6 +83,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didWakeNotification)
             .sink { [weak self] _ in
                 self?.store.reload()
+                self?.store.systemDidWake()
                 self?.store.checkDue()
             }
             .store(in: &cancellables)
@@ -83,6 +93,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     func popoverDidClose(_ notification: Notification) {
+        NotificationCenter.default.post(name: .popoverDidClose, object: nil)
+        // A first-run permission prompt takes focus and closes the popover; keep going,
+        // the popover reopens once recording starts.
+        guard !speech.isRequestingPermission else { return }
         // Don't keep the microphone open behind a closed popover; save what was said.
         Task { await capture.finish() }
     }
@@ -97,6 +111,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             NSApp.activate(ignoringOtherApps: true)
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             popover.contentViewController?.view.window?.makeKey()
+            // Open calm, like the design: no field focused (and no focus ring) until clicked.
+            popover.contentViewController?.view.window?.makeFirstResponder(nil)
             store.reload() // pick up notes synced from other Macs
         }
         Task { await capture.refreshHealth() }
@@ -111,13 +127,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         Task { await capture.start() }
     }
 
+    static func makeMainMenu() -> NSMenu {
+        let edit = NSMenu(title: "Edit")
+        edit.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        edit.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "z")
+            .keyEquivalentModifierMask = [.command, .shift]
+        edit.addItem(.separator())
+        edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+
+        let main = NSMenu()
+        let editItem = main.addItem(withTitle: "Edit", action: nil, keyEquivalent: "")
+        editItem.submenu = edit
+        return main
+    }
+
     private func updateIcon(recording: Bool) {
-        // Mirrors the app icon (a note with a microphone); template images adapt to light/dark menu bars.
-        let symbol = recording ? "record.circle.fill" : "mic.square.fill"
-        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: recording ? "Voice Notes – listening" : "Voice Notes")?
-            .withSymbolConfiguration(.init(pointSize: 15, weight: .regular))
-        image?.isTemplate = true
-        statusItem.button?.image = image
+        statusItem.button?.image = Self.statusImage(recording: recording)
+    }
+
+    /// The menu bar icon. A template image, so macOS tints it for light and dark menu bars.
+    static func statusImage(recording: Bool) -> NSImage {
+        let symbol = NSImage(systemSymbolName: recording ? "record.circle.fill" : "waveform",
+                             accessibilityDescription: nil)!
+            .withSymbolConfiguration(.init(pointSize: 15, weight: .regular))!
+        let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { rect in
+            let size = symbol.size
+            symbol.draw(in: NSRect(x: (rect.width - size.width) / 2,
+                                   y: (rect.height - size.height) / 2,
+                                   width: size.width, height: size.height))
+            return true
+        }
+        image.accessibilityDescription = recording ? "Voice Notes – listening" : "Voice Notes"
+        image.isTemplate = true
+        return image
     }
 
     private func updateBadge() {

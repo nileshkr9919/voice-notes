@@ -26,6 +26,8 @@ You don't need anything installed beforehand. The installer sets up Ollama, down
 
 ## Using it
 - **Capture:** click the menu bar icon, or press **⌥⇧N** anywhere. Listening stops when you pause (or press ⌥⇧N again). You can also type.
+- **Habits:** "remind me to drink water every 10–20 minutes" or "get up and walk frequently" repeat smartly: only during active hours, never while you're away or on a call, and walk reminders count only time at your Mac.
+- **Checklists:** "buy milk, eggs, bread and coffee" becomes a list you can tick off right in the popover.
 - **Reminders:** a notification with **Snooze** and **Done**, read aloud in one of 38 voices (Settings → Voice). The menu bar shows how many reminders need attention.
 - **Find notes:** Reminders / Notes / Done tabs and search. Double-click to edit; right-click to snooze, reschedule, copy or delete (with undo).
 - **Turn on Settings → Open at login** so reminders always fire.

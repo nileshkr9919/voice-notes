@@ -14,6 +14,109 @@ struct Note: Codable, Identifiable, Equatable {
     var notified = false
     /// Deleted notes are kept as tombstones for a while so the deletion syncs to other devices.
     var isDeleted = false
+    /// Set for habits like "drink water every 10–20 minutes"; `remindAt` is then the next occurrence.
+    var repeatRule: RepeatRule?
+    /// Set for list notes ("buy milk, eggs and bread"); empty means a plain note.
+    var items: [ChecklistItem] = []
+
+    var isRepeating: Bool { repeatRule != nil }
+    var isChecklist: Bool { !items.isEmpty }
+    var doneItemCount: Int { items.filter(\.done).count }
+
+    /// The note as plain text, for copying, speaking and searching.
+    var plainText: String {
+        guard isChecklist else { return body }
+        let list = items.map { "\($0.done ? "✓" : "-") \($0.text)" }.joined(separator: "\n")
+        return body.isEmpty || body == title ? list : body + "\n" + list
+    }
+}
+
+struct ChecklistItem: Codable, Equatable, Identifiable {
+    var id = UUID()
+    var text: String
+    var done = false
+}
+
+/// How a repeating reminder recurs.
+struct RepeatRule: Codable, Equatable {
+    /// Gap between reminders. When min < max, each gap is picked at random in the range.
+    var minMinutes: Int
+    var maxMinutes: Int
+    /// Counts only time spent at the Mac: a break restarts the timer ("get up and walk").
+    var activeTimeOnly = false
+    /// Active hours as minutes since midnight; nil means all day. A start after the end wraps past midnight.
+    var startMinute: Int?
+    var endMinute: Int?
+    /// Allowed weekdays (Calendar numbering, 1 = Sunday); nil means every day.
+    var weekdays: [Int]?
+    /// How many times it was marked done on `doneDate`'s day.
+    var doneCount = 0
+    var doneDate: Date?
+
+    var doneToday: Int {
+        guard let doneDate, Calendar.current.isDateInToday(doneDate) else { return 0 }
+        return doneCount
+    }
+
+    mutating func recordDone(at date: Date = Date()) {
+        doneCount = doneToday + 1
+        doneDate = date
+    }
+
+    /// The next reminder after `date`, inside the active hours and weekdays.
+    func nextOccurrence(after date: Date, randomMinutes: (ClosedRange<Int>) -> Int = { Int.random(in: $0) }) -> Date {
+        let low = max(1, min(minMinutes, maxMinutes))
+        let gap = randomMinutes(low...max(low, maxMinutes))
+        return nextActive(from: date.addingTimeInterval(TimeInterval(gap * 60)))
+    }
+
+    /// `date` if it's inside the active window, otherwise the start of the next window.
+    func nextActive(from date: Date) -> Date {
+        if isActive(at: date) { return date }
+        let cal = Calendar.current
+        let day = cal.startOfDay(for: date)
+        for offset in 0...8 {
+            guard let start = cal.date(byAdding: .minute, value: startMinute ?? 0,
+                                       to: cal.date(byAdding: .day, value: offset, to: day)!) else { continue }
+            if start > date && isActive(at: start) { return start }
+        }
+        return date
+    }
+
+    func isActive(at date: Date) -> Bool {
+        let cal = Calendar.current
+        if let weekdays, !weekdays.contains(cal.component(.weekday, from: date)) { return false }
+        guard let start = startMinute, let end = endMinute, start != end else { return true }
+        let parts = cal.dateComponents([.hour, .minute], from: date)
+        let minute = parts.hour! * 60 + parts.minute!
+        return start < end ? (minute >= start && minute < end) : (minute >= start || minute < end)
+    }
+
+    /// Short description, e.g. "every 10–20 min · 9:00–18:00 · weekdays".
+    var summary: String {
+        let range = minMinutes % 60 == 0 && maxMinutes % 60 == 0
+            ? "\(minMinutes / 60)–\(maxMinutes / 60) hours" : "\(minMinutes)–\(maxMinutes) min"
+        var parts = ["every " + (minMinutes == maxMinutes ? Self.duration(minMinutes) : range)]
+        if activeTimeOnly { parts[0] += " at your Mac" }
+        if let start = startMinute, let end = endMinute {
+            parts.append("\(Self.clock(start))–\(Self.clock(end))")
+        }
+        if let weekdays {
+            let set = Set(weekdays)
+            parts.append(set == [2, 3, 4, 5, 6] ? "weekdays" : set == [1, 7] ? "weekends"
+                : weekdays.sorted().map { Calendar.current.shortWeekdaySymbols[$0 - 1] }.joined(separator: " "))
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private static func duration(_ minutes: Int) -> String {
+        if minutes % 60 == 0 { return minutes == 60 ? "hour" : "\(minutes / 60) hours" }
+        return "\(minutes) min"
+    }
+
+    private static func clock(_ minute: Int) -> String {
+        String(format: "%d:%02d", minute / 60, minute % 60)
+    }
 }
 
 extension Note {
@@ -30,6 +133,8 @@ extension Note {
         isDone = try c.decodeIfPresent(Bool.self, forKey: .isDone) ?? false
         notified = try c.decodeIfPresent(Bool.self, forKey: .notified) ?? false
         isDeleted = try c.decodeIfPresent(Bool.self, forKey: .isDeleted) ?? false
+        repeatRule = try c.decodeIfPresent(RepeatRule.self, forKey: .repeatRule)
+        items = try c.decodeIfPresent([ChecklistItem].self, forKey: .items) ?? []
     }
 }
 

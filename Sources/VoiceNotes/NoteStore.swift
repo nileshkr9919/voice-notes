@@ -18,14 +18,24 @@ final class NoteStore: ObservableObject {
     var onDue: (([Note]) -> Void)?
     /// Whether this Mac should announce reminders. When off, other devices handle them.
     var ringsOnThisDevice: () -> Bool = { true }
+    /// What the user is doing; habit reminders wait for a good moment.
+    var context: () -> UserContext = { .active }
 
     /// All records including tombstones, by id.
     private var records: [UUID: Note] = [:]
     /// Notes changed here whose file write failed; retried and never replaced by older disk copies.
     private var unsaved: Set<UUID> = []
     private var timer: Timer?
+    /// Whether the user was on a break at the last check (to notice when they come back).
+    private var wasOnBreak = false
 
     static let tombstoneLifetime: TimeInterval = 30 * 24 * 3600
+    /// No input for this long means nobody's at the Mac to see a habit reminder.
+    static let awayAfter: TimeInterval = 2 * 60
+    /// A break this long counts as having got up, restarting "time at your Mac" timers.
+    static let breakAfter: TimeInterval = 5 * 60
+    /// Habit reminders wait out a call, but not forever.
+    static let maxCallDeferral: TimeInterval = 45 * 60
 
     init(folderURL: URL = Prefs.notesFolderURL,
          legacyFileURL: URL? = NoteFolder.legacyFileURL,
@@ -95,8 +105,18 @@ final class NoteStore: ObservableObject {
             current.title = note.title
             current.body = note.body
             current.tag = note.tag
+            current.items = note.items
             if current.remindAt != note.remindAt {
                 current.remindAt = note.remindAt
+                current.notified = false
+            }
+            if current.repeatRule != note.repeatRule {
+                // Keep today's count; restart the schedule from the new rule.
+                var rule = note.repeatRule
+                rule?.doneCount = current.repeatRule?.doneCount ?? 0
+                rule?.doneDate = current.repeatRule?.doneDate
+                current.repeatRule = rule
+                if let rule { current.remindAt = rule.nextOccurrence(after: Date()) }
                 current.notified = false
             }
         }
@@ -114,12 +134,31 @@ final class NoteStore: ObservableObject {
         mutate(note.id) { $0.isDeleted = false }
     }
 
+    /// For a repeating reminder, "done" means "did it this time": it's counted and the next one is scheduled.
     func toggleDone(_ id: UUID) {
+        if note(id: id)?.isRepeating == true { return completeOccurrence(id) }
         mutate(id) { $0.isDone.toggle() }
     }
 
+    /// Ticks or unticks one item of a checklist note.
+    func toggleItem(_ itemID: UUID, in id: UUID) {
+        mutate(id) { note in
+            guard let i = note.items.firstIndex(where: { $0.id == itemID }) else { return }
+            note.items[i].done.toggle()
+        }
+    }
+
     func markDone(_ id: UUID) {
+        if note(id: id)?.isRepeating == true { return completeOccurrence(id) }
         mutate(id) { $0.isDone = true }
+    }
+
+    private func completeOccurrence(_ id: UUID, at now: Date = Date()) {
+        mutate(id) {
+            $0.repeatRule?.recordDone(at: now)
+            $0.remindAt = $0.repeatRule?.nextOccurrence(after: now)
+            $0.notified = false
+        }
     }
 
     func setReminder(_ id: UUID, to date: Date?) {
@@ -138,13 +177,53 @@ final class NoteStore: ObservableObject {
 
     func checkDue(now: Date = Date()) {
         guard ringsOnThisDevice() else { return }
+        let context = context()
+        let onBreak = context.screenLocked || context.idleSeconds >= Self.breakAfter
+        if onBreak {
+            wasOnBreak = true
+        } else if wasOnBreak {
+            wasOnBreak = false
+            restartTimeAtMacTimers(now: now) // they just got up, so start counting again
+        }
+        let away = context.screenLocked || context.idleSeconds >= Self.awayAfter
+
         let due = records.values.filter {
             !$0.isDeleted && !$0.isDone && !$0.notified && ($0.remindAt.map { $0 <= now } ?? false)
         }
-        guard !due.isEmpty else { return }
-        // Marking it fired syncs to other Macs, so the same reminder doesn't ring everywhere.
-        for note in due { mutate(note.id) { $0.notified = true } }
-        onDue?(due.compactMap { self.note(id: $0.id) }.sorted { $0.remindAt! < $1.remindAt! })
+        var fired: [Note] = []
+        for note in due.sorted(by: { $0.remindAt! < $1.remindAt! }) {
+            guard let rule = note.repeatRule else {
+                // One-time reminders always fire on time.
+                // Marking it fired syncs to other Macs, so the same reminder doesn't ring everywhere.
+                mutate(note.id) { $0.notified = true }
+                fired.append(note)
+                continue
+            }
+            // Habit reminders wait for a good moment: not to an empty room, not mid-call.
+            if away { continue }
+            if context.inCall && now.timeIntervalSince(note.remindAt!) < Self.maxCallDeferral { continue }
+            mutate(note.id) {
+                $0.remindAt = rule.nextOccurrence(after: now)
+                $0.notified = false
+            }
+            fired.append(note)
+        }
+        guard !fired.isEmpty else { return }
+        onDue?(fired)
+    }
+
+    /// After sleep the Mac was certainly left alone, so "time at your Mac" starts over.
+    func systemDidWake(now: Date = Date()) {
+        restartTimeAtMacTimers(now: now)
+    }
+
+    private func restartTimeAtMacTimers(now: Date) {
+        for note in records.values where !note.isDeleted && note.repeatRule?.activeTimeOnly == true {
+            mutate(note.id) {
+                $0.remindAt = $0.repeatRule?.nextOccurrence(after: now)
+                $0.notified = false
+            }
+        }
     }
 
     // MARK: Sync
@@ -198,7 +277,7 @@ final class NoteStore: ObservableObject {
     private func mutate(_ id: UUID, _ change: (inout Note) -> Void) {
         guard var note = records[id] else { return }
         change(&note)
-        note.updatedAt = max(NoteFolder.now, note.updatedAt.addingTimeInterval(0.001))
+        note.updatedAt = max(NoteFolder.now, NoteFolder.justAfter(note.updatedAt))
         persist(note)
     }
 

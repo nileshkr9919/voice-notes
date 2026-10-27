@@ -62,8 +62,9 @@ final class CaptureModel: ObservableObject {
         do {
             note = try await Ollama.parse(text, model: Prefs.modelName)
             ollamaProblem = nil
-            status = Status(text: note.remindAt.map { "Saved “\(note.title)” · \(Self.format($0))" }
-                ?? "Saved “\(note.title)”")
+            let when = note.repeatRule?.summary ?? note.remindAt.map(Self.format)
+                ?? (note.isChecklist ? "\(note.items.count) items" : nil)
+            status = Status(text: when.map { "Saved “\(note.title)” · \($0)" } ?? "Saved “\(note.title)”")
         } catch {
             // Never lose a note just because the model isn't available.
             note = Note(title: String(text.prefix(40)), body: text, tag: "other")

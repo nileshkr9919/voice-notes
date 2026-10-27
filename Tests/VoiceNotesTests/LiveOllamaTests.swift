@@ -84,6 +84,13 @@ final class LiveOllamaTests: XCTestCase {
         XCTAssertEqual(snooze.minutes, 60)
     }
 
+    func testNoteTextLeavesOutTheSchedule() async throws {
+        let habit = try await Ollama.parse("walk away from screen every 30 minutes", model: "gemma4")
+        XCTAssertNotNil(habit.repeatRule)
+        XCTAssertFalse(habit.body.lowercased().contains("30"), habit.body)
+        XCTAssertFalse(habit.reminderText.lowercased().contains("every"), habit.reminderText)
+    }
+
     func testMissingModelIsReported() async {
         do {
             _ = try await Ollama.parse("hello", model: "no-such-model-xyz")

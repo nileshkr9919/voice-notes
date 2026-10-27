@@ -21,6 +21,8 @@ final class CaptureModel: ObservableObject {
     }
     /// Tab to switch to after saving, so the new note is visible.
     @Published var focusTab: NoteTab?
+    /// True when macOS won't show Voice Notes' notifications, so reminders would only be spoken.
+    @Published var notificationsOff = false
     /// Why Ollama can't be used right now, if anything.
     @Published private(set) var ollamaProblem: String?
 

@@ -225,6 +225,14 @@ struct ContentView: View {
                 Button("Retry") { Task { await capture.refreshHealth() } }
             }
         }
+        if capture.notificationsOff {
+            Banner(systemImage: "bell.slash.fill", tint: .orange,
+                   text: "Notifications are off for Voice Notes, so reminders can't pop up.") {
+                Button("Turn On") {
+                    NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=\(Bundle.main.bundleIdentifier ?? "")")!)
+                }
+            }
+        }
         if habitsPausedUntil > Date().timeIntervalSince1970 {
             Banner(systemImage: "pause.circle.fill", tint: .secondary,
                    text: "Habit reminders paused until \(CaptureModel.format(Date(timeIntervalSince1970: habitsPausedUntil))).") {
@@ -483,7 +491,7 @@ struct NoteRow: View {
             .accessibilityHidden(true) // covered by accessibilityActions
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(note.title)
+                Text(note.displayTitle)
                     .font(.body.weight(.semibold))
                     .strikethrough(note.isDone)
                     .foregroundStyle(note.isDone ? VoiceStyle.secondaryText : VoiceStyle.primaryText)

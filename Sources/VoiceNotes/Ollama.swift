@@ -302,8 +302,8 @@ enum Ollama {
         Upcoming dates:
         \(week)
 
-        - title: short summary, at most 6 words.
-        - body: the full note, cleaned up (fix punctuation, drop filler words like "remind me to"), keep every detail.
+        - title: short summary, at most 6 words, without timing words ("Walk away from the screen", not "…every 30 minutes").
+        - body: the note itself, cleaned up (fix punctuation, drop filler like "remind me to"), keeping every detail EXCEPT timing: leave out when/how often ("tomorrow at 9", "every 30 minutes", "frequently", "during work hours") because that goes in remindAt/repeat. "walk away from the screen every 30 minutes" → "Walk away from the screen."
         - remindAt: set it whenever the note mentions ANY day or time (an appointment, a deadline, "remind me", "on Friday at 4"). Local date-time as "yyyy-MM-ddTHH:mm" with NO timezone offset, always in the future. Use the upcoming dates list for weekdays. A day without a time means 09:00. "in 20 minutes" is relative to now. "tonight" means 20:00. If no day or time is mentioned, null.
         - repeat: ONLY for recurring reminders/habits ("every 20 minutes", "every hour", "regularly", "frequently", "throughout the day", "keep reminding me"); otherwise null. When set, remindAt is null.
           - minMinutes/maxMinutes: the gap. "every 10-20 minutes" → 10 and 20. A fixed interval uses the same number for both. Vague wording: drink water/hydrate "frequently/regularly" → 30 and 45; get up, walk, stretch, move, posture, rest your eyes, take a break "frequently/regularly" → 45 and 60; anything else vague → 60 and 60.

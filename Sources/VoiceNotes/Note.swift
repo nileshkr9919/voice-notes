@@ -23,6 +23,52 @@ struct Note: Codable, Identifiable, Equatable {
     var isChecklist: Bool { !items.isEmpty }
     var doneItemCount: Int { items.filter(\.done).count }
 
+    /// What a reminder says and shows when it fires: the note without its schedule words
+    /// ("Walk away from the screen", not "…every 30 minutes"), which are already in the reminder.
+    var reminderText: String {
+        let cleaned = Self.removingScheduleWords(from: body)
+        let text = cleaned.isEmpty ? Self.removingScheduleWords(from: title) : cleaned
+        guard !isChecklist else { return title + ": " + items.filter { !$0.done }.map(\.text).joined(separator: ", ") }
+        return text.isEmpty ? title : text
+    }
+
+    private static let schedulePatterns: [String] = [
+        #"\b(remind me to|remind me|don't forget to|do not forget to)\b"#,
+        #"\b(every|each)\s+((\d+|a few|few|couple of)\s*((–|-|to)\s*\d+\s*)?)?(minutes?|mins?|hours?|hrs?|days?|mornings?|evenings?|weeks?)\b"#,
+        #"\b(frequently|regularly|periodically|throughout the day|from time to time|now and then|every now and then)\b"#,
+        #"\b(during|in)\s+(my\s+)?(work(ing)?\s+hours|office\s+hours|the\s+(morning|afternoon|evening))\b"#,
+        #"\bon\s+(weekdays|weekends|week\s?days)\b"#,
+        #"\b(today|tomorrow|tonight|this\s+(morning|afternoon|evening))(\s+(morning|afternoon|evening|night))?\b"#,
+        #"\b(on\s+)?(next\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b"#,
+        #"\b(at|by|around)\s+\d{1,2}([:.]\d{2})?\s*(am|pm|a\.m\.|p\.m\.|o'clock)?"#,
+        #"\bin\s+(\d+|an?|half an?)\s*(minutes?|mins?|hours?|hrs?)\b"#,
+    ]
+
+    /// Strips timing phrases; tidies spacing and punctuation that's left behind.
+    static func removingScheduleWords(from text: String) -> String {
+        var result = text
+        for pattern in schedulePatterns {
+            result = result.replacingOccurrences(of: pattern, with: "", options: [.regularExpression, .caseInsensitive])
+        }
+        result = result.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+([.,!?;:])"#, with: "$1", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet(charactersIn: " ,;:-–").union(.whitespacesAndNewlines))
+        while let last = result.last, ",;:-–".contains(last) { result.removeLast() }
+        result = result.trimmingCharacters(in: .whitespaces)
+        guard let first = result.first else { return "" }
+        result = first.uppercased() + result.dropFirst()
+        if let last = result.last, !".!?".contains(last) { result += "." }
+        return result
+    }
+
+    /// The title as shown in the list: schedule words removed (older notes may contain them).
+    var displayTitle: String {
+        guard remindAt != nil || isRepeating else { return title }
+        var cleaned = Self.removingScheduleWords(from: title)
+        if cleaned.hasSuffix("."), !title.hasSuffix(".") { cleaned.removeLast() }
+        return cleaned.isEmpty ? title : cleaned
+    }
+
     /// The note as plain text, for copying, speaking and searching.
     var plainText: String {
         guard isChecklist else { return body }

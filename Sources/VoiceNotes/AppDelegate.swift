@@ -33,9 +33,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             guard UserDefaults.standard.bool(forKey: Prefs.speakReminders) else { return }
             // One announcement per batch, so a backlog after sleep isn't read out note by note.
             if due.count == 1 {
-                Speaker.shared.say("Reminder. \(due[0].body)")
+                Speaker.shared.say(due[0].reminderText)
             } else {
-                let titles = due.prefix(3).map(\.title).joined(separator: ", ")
+                let titles = due.prefix(3).map { $0.title }.joined(separator: ", ")
                 Speaker.shared.say("You have \(due.count) reminders: \(titles)\(due.count > 3 ? ", and more" : "").")
             }
         }
@@ -63,7 +63,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         // Show how many reminders have gone off and still need attention.
         store.$notes
             .receive(on: RunLoop.main)
-            .sink { [weak self] _ in self?.updateBadge() }
+            .sink { [weak self] _ in
+                self?.updateBadge()
+                self?.syncSchedule()
+            }
+            .store(in: &cancellables)
+        // "Ring reminders on this Mac" changes what macOS should hold.
+        NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
+            .debounce(for: .milliseconds(300), scheduler: RunLoop.main)
+            .sink { [weak self] _ in self?.syncSchedule() }
             .store(in: &cancellables)
 
         popover.behavior = .transient
@@ -127,6 +135,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             store.reload() // pick up notes synced from other Macs
         }
         Task { await capture.refreshHealth() }
+        Task { capture.notificationsOff = !(await notifier.notificationsEnabled()) }
     }
 
     private func quickCapture() {
@@ -188,6 +197,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         let text = Briefing.text(for: store.notes, now: now)
         notifier.postBriefing(text)
         Speaker.shared.say(text)
+    }
+
+    private func syncSchedule() {
+        notifier?.syncSchedule(store.notes, ringsHere: UserDefaults.standard.bool(forKey: Prefs.ringOnThisMac))
     }
 
     private func updateBadge() {

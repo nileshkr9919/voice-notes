@@ -6,6 +6,9 @@
 - **Commands** — "mark milk done", "I drank water", "snooze water for an hour", "delete the dentist note", "pause habits until 3".
 - **Daily briefing** (optional) — a spoken summary of today's reminders, anything still open, and your habits, once a day at a time you choose.
 - **Keyboard control** — ↑/↓ to select, Space to complete, Return to edit, ⌫ to delete, ⌘F search, ⌘1–3 tabs; just start typing to add a note.
+- **Reminders even when the app is quit** — upcoming one-time reminders are also scheduled with macOS, so they still pop up if Voice Notes isn't running (no duplicates when it is).
+- Reminders say and show just the task ("Walk away from the screen."), without the schedule ("every 30 minutes").
+- A banner warns when macOS notifications are switched off for Voice Notes, with a button to turn them on.
 - **Checklists** — "buy milk, eggs, bread and coffee" becomes a tickable list; tick items right in the list or edit them in the editor.
 - **macOS-native redesign** from Penpot designs: compact popover that fits its content, flat controls, Reminders-style rows, in-popover editor and settings; waveform menu bar icon.
 - Copy/paste and other edit shortcuts work in all text fields; the popover saves edits when it closes on its own.
